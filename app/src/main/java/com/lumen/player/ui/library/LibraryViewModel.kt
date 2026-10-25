@@ -1,5 +1,6 @@
 package com.lumen.player.ui.library
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.lumen.player.LumenApp
@@ -53,18 +54,23 @@ class LibraryViewModel : ViewModel() {
 
     fun refresh() {
         viewModelScope.launch {
-            val result = runCatching {
-                val videos = container.localMedia.videos()
-                LibraryData(
-                    videos = videos,
-                    music = container.localMedia.audio(),
-                    folders = videos.groupBy { it.sourceLabel }
-                        .map { (name, items) -> LocalFolder(name, name, items) }
-                        .sortedBy { it.name.lowercase() },
-                    loading = false,
-                )
+            // 영상과 음악을 따로 읽어 한쪽이 실패해도 다른 쪽은 보이게 한다
+            val videos = runCatching { container.localMedia.videos() }
+            val music = runCatching { container.localMedia.audio() }
+            listOfNotNull(videos.exceptionOrNull(), music.exceptionOrNull()).forEach {
+                Log.w("LumenLibrary", "로컬 미디어를 읽지 못했습니다", it)
             }
-            _data.value = result.getOrElse { LibraryData(loading = false, permissionMissing = it is SecurityException) }
+            val videoList = videos.getOrDefault(emptyList())
+            _data.value = LibraryData(
+                videos = videoList,
+                music = music.getOrDefault(emptyList()),
+                folders = videoList.groupBy { it.sourceLabel }
+                    .map { (name, items) -> LocalFolder(name, name, items) }
+                    .sortedBy { it.name.lowercase() },
+                loading = false,
+                permissionMissing = videos.exceptionOrNull() is SecurityException &&
+                    music.exceptionOrNull() is SecurityException,
+            )
         }
     }
 }

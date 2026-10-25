@@ -63,9 +63,9 @@ class LocalMediaRepository(private val context: Context) {
         )
         val artBase = android.net.Uri.parse("content://media/external/audio/albumart")
         val out = mutableListOf<MediaEntry>()
+        // MediaStore는 정렬 절의 COLLATE LOCALIZED를 거부하므로 제목 정렬은 앱에서 한다
         context.contentResolver.query(
-            collection, projection, "${MediaStore.Audio.Media.IS_MUSIC} != 0", null,
-            "${MediaStore.Audio.Media.TITLE} COLLATE LOCALIZED ASC",
+            collection, projection, "${MediaStore.Audio.Media.IS_MUSIC} != 0", null, null,
         )?.use { c ->
             val id = c.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
             val title = c.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
@@ -89,7 +89,8 @@ class LocalMediaRepository(private val context: Context) {
                 )
             }
         }
-        out
+        val collator = java.text.Collator.getInstance()
+        out.sortedWith { a, b -> collator.compare(a.title, b.title) }
     }
 
     /** 영상을 폴더(버킷) 단위로 묶는다. */
