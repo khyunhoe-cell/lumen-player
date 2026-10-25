@@ -37,11 +37,13 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.lumen.player.LumenApp
+import com.lumen.player.data.settings.AiSettings
 import com.lumen.player.data.settings.SecretBox
 import com.lumen.player.data.settings.SttProvider
 import com.lumen.player.data.settings.SubtitleFont
 import com.lumen.player.data.settings.SubtitlePosition
 import com.lumen.player.data.settings.SubtitleStyle
+import com.lumen.player.data.settings.TranslationProvider
 import com.lumen.player.subtitle.ui.SubtitlePreview
 import com.lumen.player.ui.components.ColorSwatches
 import com.lumen.player.ui.components.LabeledSlider
@@ -51,6 +53,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Locale
 
 private val textColors = listOf(0xFFFFFFFF, 0xFFFFE9A8, 0xFFFFD400, 0xFFA8E8DE, 0xFF9AD0FF, 0xFFF5B3C6, 0xFFB8F28A)
 private val darkColors = listOf(0xFF000000, 0xFF183641, 0xFF2B1D00, 0xFF3A0F1E, 0xFFFFFFFF)
@@ -224,15 +227,98 @@ fun AiSettingsScreen(nav: NavController) {
             LabeledSlider("한 줄 최대 글자 수", ai.maxCharsPerLine.toFloat(), 16f..48f, "${ai.maxCharsPerLine}자") { v ->
                 scope.launch { repo.updateAi { it.copy(maxCharsPerLine = v.toInt()) } }
             }
-            ToggleRow("영어로 번역", "Whisper 번역 모드 (Groq·OpenAI·내 서버)", ai.translateToEnglish) { v ->
-                scope.launch { repo.updateAi { it.copy(translateToEnglish = v) } }
-            }
             TextButton(onClick = {
                 scope.launch { repo.updateAi { it.copy(language = language.trim(), vocabularyPrompt = vocab.trim()) } }
             }) { Text("인식 옵션 저장") }
+
+            TranslationSection(ai)
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+private val translationTargets = listOf("ko", "en", "ja", "zh", "es", "fr", "de", "vi", "th", "id")
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TranslationSection(ai: AiSettings) {
+    val repo = LumenApp.container.settings
+    val scope = rememberCoroutineScope()
+    val target = ai.targetLanguage.ifBlank { if (ai.translateToEnglish) "en" else "" }
+    fun setTarget(code: String) = scope.launch {
+        repo.updateAi { it.copy(targetLanguage = code, translateToEnglish = false) }
+    }
+
+    Label("자막 번역")
+    Text(
+        "인식한 대사를 원하는 언어로 번역해 자막을 만듭니다. 시간은 원래 대사에 맞추고, 조각마다 번역이 끝나는 대로 화면에 보여 줍니다.",
+        style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted,
+    )
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        LumenChip("번역 안 함", target.isBlank()) { setTarget("") }
+        translationTargets.forEach { code ->
+            LumenChip(Locale.forLanguageTag(code).displayLanguage, target == code) { setTarget(code) }
+        }
+    }
+    var otherCode by remember(target) { mutableStateOf(if (target in translationTargets) "" else target) }
+    OutlinedTextField(
+        otherCode, { otherCode = it.lowercase().take(5) }, singleLine = true,
+        label = { Text("다른 언어 코드 (예: pt, ru, it)") }, modifier = Modifier.fillMaxWidth(),
+    )
+    TextButton(enabled = otherCode.isNotBlank(), onClick = { setTarget(otherCode.trim()) }) { Text("이 언어로 번역") }
+    if (target.isBlank()) return
+    if (target == ai.language) {
+        Text("인식 언어와 번역 언어가 같아 번역하지 않습니다.", style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted)
+    }
+
+    Label("번역 엔진")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        TranslationProvider.entries.forEach { p ->
+            LumenChip(p.label, ai.translator == p) { scope.launch { repo.updateAi { it.copy(translator = p) } } }
+        }
+    }
+    Text(ai.translator.note, style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted)
+    if (ai.translator == TranslationProvider.CUSTOM) {
+        var endpoint by remember(ai.translationEndpoint) { mutableStateOf(ai.translationEndpoint) }
+        OutlinedTextField(
+            endpoint, { endpoint = it }, singleLine = true, label = { Text("번역 서버 주소 (OpenAI 호환 /v1)") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        TextButton(onClick = { scope.launch { repo.updateAi { it.copy(translationEndpoint = endpoint.trim()) } } }) { Text("주소 저장") }
+    }
+    val keyOwner = ai.translator.keyOf
+    if (keyOwner == ai.provider) {
+        Text("음성 인식에 넣은 ${keyOwner.label} 키를 함께 씁니다.", style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted)
+    } else {
+        var keyInput by remember(keyOwner) { mutableStateOf("") }
+        val hasKey = repo.apiKey(ai, keyOwner).isNotBlank()
+        OutlinedTextField(
+            keyInput, { keyInput = it },
+            singleLine = true,
+            label = { Text(if (hasKey) "${keyOwner.label} API 키 (저장됨 · 바꿀 때만 입력)" else "${keyOwner.label} API 키") },
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        TextButton(enabled = keyInput.isNotBlank(), onClick = {
+            scope.launch { repo.setApiKey(keyOwner, keyInput) }
+            keyInput = ""
+        }) { Text("키 저장") }
+    }
+    var model by remember(ai.translator, ai.translationModels) { mutableStateOf(ai.translationModel()) }
+    OutlinedTextField(model, { model = it }, singleLine = true, label = { Text("번역 모델") }, modifier = Modifier.fillMaxWidth())
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        translationModelSuggestions(ai.translator).forEach { m -> LumenChip(m, model == m) { model = m } }
+    }
+    TextButton(onClick = {
+        scope.launch { repo.updateAi { it.copy(translationModels = it.translationModels + (ai.translator to model.trim())) } }
+    }) { Text("모델 저장") }
+}
+
+private fun translationModelSuggestions(p: TranslationProvider) = when (p) {
+    TranslationProvider.GROQ -> listOf("llama-3.3-70b-versatile", "openai/gpt-oss-120b")
+    TranslationProvider.OPENAI -> listOf("gpt-4.1-mini", "gpt-4.1")
+    TranslationProvider.CUSTOM -> listOf("qwen2.5:7b", "gemma3:12b")
 }
 
 private fun modelSuggestions(p: SttProvider) = when (p) {

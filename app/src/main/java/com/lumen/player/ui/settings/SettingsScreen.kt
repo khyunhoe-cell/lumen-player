@@ -66,7 +66,10 @@ fun SettingsScreen(nav: NavController) {
             ToggleRow("같은 이름의 자막 자동 불러오기", ".srt .smi .ass 를 영상과 함께 찾음", s.autoLoadSubtitles) { v -> scope.launch { repo.update { it.copy(autoLoadSubtitles = v) } } }
         }
         item { LinkRow("자막 스타일", "${s.subtitle.font.label} · ${s.subtitle.sizeSp.toInt()} · ${s.subtitle.position.label}") { nav.navigate(Routes.SUBTITLE_STYLE) } }
-        item { LinkRow("AI 자막 생성", "${s.ai.provider.label} · ${s.ai.model()}") { nav.navigate(Routes.AI) } }
+        item {
+            val translate = s.ai.target().let { if (it.isBlank()) "" else " · ${java.util.Locale(it).displayLanguage}로 번역" }
+            LinkRow("AI 자막 생성", "${s.ai.provider.label} · ${s.ai.model()}$translate") { nav.navigate(Routes.AI) }
+        }
         item { LinkRow("온라인 자막 검색", "언어 ${s.online.languages}") { nav.navigate(Routes.ONLINE) } }
         item { SectionTitle("정보") }
         item {

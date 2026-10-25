@@ -194,7 +194,8 @@ fun SubtitleSheet(service: PlaybackService, state: PlayerUiState, onDismiss: () 
                         BigAction(
                             icon = { Icon(Icons.Filled.AutoAwesome, null, modifier = Modifier.size(20.dp)) },
                             title = "AI로 생성",
-                            sub = "${settings.ai.provider.label} ${settings.ai.model()} · ${languageName(settings.ai.language)}",
+                            sub = "${settings.ai.provider.label} ${settings.ai.model()} · ${languageName(settings.ai.language)}" +
+                                settings.ai.target().let { if (it.isBlank()) "" else " → ${Locale(it).displayLanguage}" },
                             highlighted = true,
                             modifier = Modifier.weight(1f),
                         ) {

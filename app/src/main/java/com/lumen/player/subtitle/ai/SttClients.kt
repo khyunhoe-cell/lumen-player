@@ -32,7 +32,7 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 private val wav = "audio/wav".toMediaType()
 
 /** 무료 등급의 분당 요청 제한(429)에 걸리면 Retry-After 만큼 기다렸다가 다시 보낸다. */
-private suspend fun OkHttpClient.executeWithRetry(build: () -> Request): String {
+internal suspend fun OkHttpClient.executeWithRetry(what: String = "음성 인식", build: () -> Request): String {
     var attempt = 0
     while (true) {
         val resp: Response = newCall(build()).execute()
@@ -46,7 +46,7 @@ private suspend fun OkHttpClient.executeWithRetry(build: () -> Request): String 
             }
             resp.code == 401 || resp.code == 403 -> throw IOException("API 키가 올바르지 않습니다 (${resp.code})")
             resp.code == 413 -> throw IOException("오디오 조각이 공급자의 크기 제한을 넘었습니다")
-            else -> throw IOException("음성 인식 요청 실패 (${resp.code}): ${body.take(300)}")
+            else -> throw IOException("$what 요청 실패 (${resp.code}): ${body.take(300)}")
         }
     }
 }
@@ -61,7 +61,8 @@ class OpenAiCompatibleClient(
     private val settings: AiSettings,
 ) : SttClient {
     override suspend fun transcribe(chunk: File, previousText: String): List<Segment> {
-        val endpoint = if (settings.translateToEnglish) "audio/translations" else "audio/transcriptions"
+        // 번역은 Whisper 번역 모드(영어만 가능, 단어 시간 없음) 대신 SubtitleTranslator가 인식 뒤에 한다
+        val endpoint = "audio/transcriptions"
         // Whisper는 프롬프트의 마지막 224토큰만 본다. 용어집 + 직전 대사로 문맥을 이어 준다.
         val prompt = listOf(settings.vocabularyPrompt.trim(), previousText.takeLast(200)).filter { it.isNotEmpty() }.joinToString(" ")
         val body = {
@@ -70,12 +71,10 @@ class OpenAiCompatibleClient(
                 .addFormDataPart("model", settings.model())
                 .addFormDataPart("response_format", "verbose_json")
                 .addFormDataPart("temperature", "0")
+                .addFormDataPart("timestamp_granularities[]", "segment")
+                .addFormDataPart("timestamp_granularities[]", "word")
                 .apply {
-                    if (!settings.translateToEnglish) {
-                        addFormDataPart("timestamp_granularities[]", "segment")
-                        addFormDataPart("timestamp_granularities[]", "word")
-                        if (settings.language.isNotBlank()) addFormDataPart("language", settings.language)
-                    }
+                    if (settings.language.isNotBlank()) addFormDataPart("language", settings.language)
                     if (prompt.isNotEmpty()) addFormDataPart("prompt", prompt)
                 }
                 .build()
