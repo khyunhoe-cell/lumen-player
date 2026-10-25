@@ -2,8 +2,10 @@ package com.lumen.player.subtitle.ai
 
 import android.content.Context
 import com.lumen.player.data.media.MediaEntry
+import com.lumen.player.data.settings.AiSettings
 import com.lumen.player.data.settings.SettingsRepository
 import com.lumen.player.data.settings.SttProvider
+import com.lumen.player.data.settings.TranslationProvider
 import com.lumen.player.remote.RemoteRegistry
 import com.lumen.player.subtitle.LoadedSubtitle
 import com.lumen.player.subtitle.SubtitleCue
@@ -74,7 +76,10 @@ class AiSubtitleGenerator(
                     SttProvider.DEEPGRAM -> DeepgramClient(http, key, ai)
                     SttProvider.ELEVENLABS -> ElevenLabsClient(http, key, ai)
                 }
-                val label = "AI · ${ai.provider.label} ${ai.model()}"
+                val target = ai.target()
+                val translator = if (target.isBlank()) null else translatorFor(ai)
+                val targetName = if (target.isBlank()) "" else java.util.Locale.forLanguageTag(target).displayLanguage.ifBlank { target }
+                val label = "AI · ${ai.provider.label} ${ai.model()}" + if (translator != null) " → $targetName" else ""
                 val chunks = Channel<AudioChunk>(capacity = 2)
                 var extractProgress = 0f
                 val cues = mutableListOf<SubtitleCue>()
@@ -105,6 +110,7 @@ class AiSubtitleGenerator(
                 }
 
                 var previousText = ""
+                var previousLines = emptyList<String>()
                 report("오디오를 추출하는 중")
                 for (chunk in chunks) {
                     report("음성을 인식하는 중 · ${formatTime(chunk.startMs)}부터")
@@ -117,7 +123,16 @@ class AiSubtitleGenerator(
                             words = s.words.map { w -> w.copy(startMs = w.startMs + chunk.startMs, endMs = w.endMs + chunk.startMs) },
                         )
                     }
-                    cues += SegmentFormatter.toCues(shifted, ai.maxCharsPerLine)
+                    val forCues = if (translator == null || shifted.isEmpty()) shifted else {
+                        report("$targetName(으)로 번역하는 중 · ${formatTime(chunk.startMs)}부터")
+                        val translated = withContext(Dispatchers.IO) {
+                            translator.translate(shifted.map { it.text }, target, ai.language, ai.vocabularyPrompt, previousLines)
+                        }
+                        // 단어 시간은 원문 기준이라 버리고, 구간 시간 안에서 글자 수 비율로 나눈다
+                        shifted.zip(translated) { s, t -> s.copy(text = t, words = emptyList()) }
+                    }
+                    cues += SegmentFormatter.toCues(forCues, ai.maxCharsPerLine)
+                    previousLines = shifted.takeLast(3).map { it.text }
                     previousText = segments.lastOrNull()?.text.orEmpty()
                     transcribedMs = chunk.startMs + chunk.durationMs
                     if (entry.durationMs <= 0) extractProgress = 1f
@@ -127,7 +142,8 @@ class AiSubtitleGenerator(
                 extractor?.join()
                 if (cues.isEmpty()) throw IllegalStateException("인식된 대사가 없습니다. 언어 설정을 확인하세요")
 
-                val file = subtitles.saveSrt(entry.uri, "${entry.title.substringBeforeLast('.')}.ai.${ai.language.ifBlank { "auto" }}", cues)
+                val lang = if (translator != null) target else ai.language.ifBlank { "auto" }
+                val file = subtitles.saveSrt(entry.uri, "${entry.title.substringBeforeLast('.')}.ai.$lang", cues)
                 val result = LoadedSubtitle(label, file.absolutePath, cues.toList())
                 _job.value = AiJob(entry.uri, entry.title, AiJob.Stage.DONE, 1f, "자막 ${cues.size}줄을 만들었습니다", cues.size)
                 onDone(result)
@@ -141,6 +157,20 @@ class AiSubtitleGenerator(
                 workDir.deleteRecursively()
             }
         }
+    }
+
+    private fun translatorFor(ai: AiSettings): SubtitleTranslator {
+        val p = ai.translator
+        val key = settings.apiKey(ai, p.keyOf)
+        if (p != TranslationProvider.CUSTOM && key.isBlank()) {
+            throw IllegalStateException("설정 › AI 자막 › 자막 번역에서 ${p.label} API 키를 넣어 주세요")
+        }
+        val baseUrl = when (p) {
+            TranslationProvider.GROQ -> "https://api.groq.com/openai/v1"
+            TranslationProvider.OPENAI -> "https://api.openai.com/v1"
+            TranslationProvider.CUSTOM -> ai.translationEndpoint
+        }
+        return SubtitleTranslator(http, baseUrl, key, ai.translationModel(), jsonMode = p != TranslationProvider.CUSTOM)
     }
 
     fun cancel() {

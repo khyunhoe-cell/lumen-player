@@ -52,6 +52,14 @@ enum class SttProvider(val label: String, val free: Boolean, val defaultModel: S
     CUSTOM("내 서버", true, "whisper-large-v3", "whisper.cpp, faster-whisper 등 OpenAI 호환 서버"),
 }
 
+/** 자막 번역에 쓰는 OpenAI 호환 chat 엔진. 키는 같은 공급자의 음성 인식 키(keyOf)를 함께 쓴다. */
+@Serializable
+enum class TranslationProvider(val label: String, val defaultModel: String, val keyOf: SttProvider, val note: String) {
+    GROQ("Groq", "llama-3.3-70b-versatile", SttProvider.GROQ, "무료 등급 제공"),
+    OPENAI("OpenAI", "gpt-4.1-mini", SttProvider.OPENAI, "유료 · 번역 품질이 안정적"),
+    CUSTOM("내 서버", "qwen2.5:7b", SttProvider.CUSTOM, "Ollama, LM Studio 등 OpenAI 호환 서버"),
+}
+
 @Serializable
 data class AiSettings(
     val provider: SttProvider = SttProvider.GROQ,
@@ -61,12 +69,25 @@ data class AiSettings(
     val customEndpoint: String = "http://192.168.0.10:8080/v1",
     /** ISO-639-1. 빈 문자열이면 자동 감지 */
     val language: String = "",
+    /** 예전 "영어로 번역" 설정. 이제는 targetLanguage = "en"과 같다 */
     val translateToEnglish: Boolean = false,
+    /** 자막을 이 언어(ISO-639-1)로 번역한다. 빈 문자열이면 인식한 언어 그대로 */
+    val targetLanguage: String = "",
+    val translator: TranslationProvider = TranslationProvider.GROQ,
+    val translationModels: Map<TranslationProvider, String> = emptyMap(),
+    val translationEndpoint: String = "http://192.168.0.10:11434/v1",
     /** 고유명사·용어를 적어 두면 인식 정확도가 오른다 */
     val vocabularyPrompt: String = "",
     val maxCharsPerLine: Int = 32,
 ) {
     fun model(p: SttProvider = provider) = models[p]?.takeIf { it.isNotBlank() } ?: p.defaultModel
+
+    fun translationModel(p: TranslationProvider = translator) =
+        translationModels[p]?.takeIf { it.isNotBlank() } ?: p.defaultModel
+
+    /** 번역할 언어. 인식 언어와 같으면 번역하지 않는다. */
+    fun target(): String = targetLanguage.ifBlank { if (translateToEnglish) "en" else "" }
+        .takeIf { it != language }.orEmpty()
 }
 
 @Serializable
