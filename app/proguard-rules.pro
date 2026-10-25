@@ -1,0 +1,14 @@
+# smbj / bouncycastle / nfs-client use reflection and optional deps
+-dontwarn org.slf4j.**
+-dontwarn javax.el.**
+-dontwarn org.ietf.jgss.**
+-dontwarn org.bouncycastle.**
+-dontwarn net.engio.mbassy.**
+-dontwarn org.jboss.netty.**
+-dontwarn io.netty.**
+-dontwarn org.apache.log4j.**
+-keep class com.hierynomus.** { *; }
+-keep class org.bouncycastle.** { *; }
+-keep class com.emc.ecs.nfsclient.** { *; }
+-keep class androidx.media3.decoder.ffmpeg.** { *; }
+-keepclassmembers class * { @kotlinx.serialization.Serializable *; }
