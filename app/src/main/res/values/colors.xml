@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="lumen_bg">#FF0E1719</color>
+    <color name="lumen_primary">#FF7FD6C8</color>
+    <color name="lumen_on_primary">#FF00332D</color>
+</resources>
