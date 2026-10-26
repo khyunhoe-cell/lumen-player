@@ -31,6 +31,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
@@ -208,26 +209,108 @@ fun AiSettingsScreen(nav: NavController) {
             }
 
             Label("인식 옵션")
-            var language by remember(ai.language) { mutableStateOf(ai.language) }
-            OutlinedTextField(
-                language, { language = it.lowercase().take(5) }, singleLine = true,
-                label = { Text("언어 코드 (ko, en, ja… 비우면 자동 감지)") }, modifier = Modifier.fillMaxWidth(),
-            )
-            Text("언어를 정해 주면 자동 감지보다 정확하고, 앞부분이 다른 언어로 잘못 인식되는 일이 줄어듭니다.", style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted)
-            var vocab by remember(ai.vocabularyPrompt) { mutableStateOf(ai.vocabularyPrompt) }
-            OutlinedTextField(
-                vocab, { vocab = it }, label = { Text("용어집 (인물 이름, 고유명사를 쉼표로)") },
-                minLines = 2, modifier = Modifier.fillMaxWidth(),
-            )
-            LabeledSlider("한 줄 최대 글자 수", ai.maxCharsPerLine.toFloat(), 16f..48f, "${ai.maxCharsPerLine}자") { v ->
-                scope.launch { repo.updateAi { it.copy(maxCharsPerLine = v.toInt()) } }
-            }
-            TextButton(onClick = {
-                scope.launch { repo.updateAi { it.copy(language = language.trim(), vocabularyPrompt = vocab.trim()) } }
-            }) { Text("인식 옵션 저장") }
+            RecognitionOptions(ai)
 
             TranslationSection(ai)
             Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+/** 인식 언어로 고를 수 있는 주요 언어. Whisper·Groq·OpenAI·Deepgram·ElevenLabs가 모두 지원한다 */
+private val recognitionLanguages = listOf("ko", "en", "ja", "zh", "es", "fr", "de", "ru", "pt", "it", "vi", "th", "id", "ar", "hi")
+
+private fun languageLabel(code: String) = Locale(code).getDisplayLanguage(Locale.KOREAN).ifBlank { code }
+
+private data class SaveStatus(val text: String, val ok: Boolean)
+
+/**
+ * 인식 언어(칩으로 고르고, 목록에 없으면 직접 입력)와 용어집.
+ * 저장하면 저장소에서 다시 읽어 실제로 저장됐는지 확인하고 결과를 보여 준다.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun RecognitionOptions(ai: AiSettings) {
+    val repo = LumenApp.container.settings
+    val scope = rememberCoroutineScope()
+    var language by remember(ai.language) { mutableStateOf(ai.language) }
+    var otherCode by remember(ai.language) { mutableStateOf(if (ai.language in recognitionLanguages) "" else ai.language) }
+    var vocab by remember(ai.vocabularyPrompt) { mutableStateOf(ai.vocabularyPrompt) }
+    var status by remember { mutableStateOf<SaveStatus?>(null) }
+    val codeValid = otherCode.isBlank() || Regex("^[a-z]{2,3}$").matches(otherCode)
+    val dirty = language != ai.language || vocab.trim() != ai.vocabularyPrompt
+
+    Text("인식 언어", style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        LumenChip("자동 감지", language.isBlank()) { language = ""; otherCode = ""; status = null }
+        recognitionLanguages.forEach { code ->
+            LumenChip(languageLabel(code), language == code) { language = code; otherCode = ""; status = null }
+        }
+    }
+    OutlinedTextField(
+        otherCode,
+        { v ->
+            otherCode = v.lowercase().filter { it in 'a'..'z' }.take(3)
+            status = null
+            if (Regex("^[a-z]{2,3}$").matches(otherCode)) language = otherCode
+        },
+        singleLine = true,
+        isError = !codeValid,
+        label = { Text("목록에 없는 언어 코드 (예: nl, pl, tr)") },
+        supportingText = {
+            Text(
+                when {
+                    !codeValid -> "영문 소문자 2~3자로 입력하세요"
+                    otherCode.isNotBlank() -> languageLabel(otherCode)
+                    else -> "ISO 639-1 코드"
+                },
+            )
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Text(
+        "언어를 정해 주면 자동 감지보다 정확하고, 앞부분이 다른 언어로 잘못 인식되는 일이 줄어듭니다.",
+        style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted,
+    )
+    OutlinedTextField(
+        vocab, { vocab = it; status = null }, label = { Text("용어집 (인물 이름, 고유명사를 쉼표로)") },
+        minLines = 2, modifier = Modifier.fillMaxWidth(),
+    )
+    LabeledSlider("한 줄 최대 글자 수", ai.maxCharsPerLine.toFloat(), 16f..48f, "${ai.maxCharsPerLine}자") { v ->
+        scope.launch { repo.updateAi { it.copy(maxCharsPerLine = v.toInt()) } }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(enabled = codeValid && dirty, onClick = {
+            val lang = language.trim()
+            val words = vocab.trim()
+            scope.launch {
+                status = runCatching {
+                    repo.updateAi { it.copy(language = lang, vocabularyPrompt = words) }
+                    // 저장소에서 다시 읽어 실제로 들어갔는지 확인한다
+                    val saved = repo.current().ai
+                    check(saved.language == lang && saved.vocabularyPrompt == words) { "저장한 값이 다시 읽히지 않습니다" }
+                    val terms = words.split(',', '\n').count { it.isNotBlank() }
+                    SaveStatus(
+                        "저장했습니다 · 인식 언어 ${if (lang.isBlank()) "자동 감지" else languageLabel(lang)}" +
+                            if (terms > 0) " · 용어 ${terms}개" else "",
+                        ok = true,
+                    )
+                }.getOrElse { SaveStatus("저장하지 못했습니다: ${it.message}", ok = false) }
+            }
+        }) { Text("인식 옵션 저장") }
+        when {
+            status != null -> Text(
+                status!!.text,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (status!!.ok) Lumen.Primary else Lumen.Error,
+                modifier = Modifier.weight(1f),
+            )
+            dirty -> Text(
+                "저장하지 않은 변경이 있습니다",
+                style = MaterialTheme.typography.bodySmall,
+                color = Lumen.Amber,
+                modifier = Modifier.weight(1f),
+            )
         }
     }
 }
