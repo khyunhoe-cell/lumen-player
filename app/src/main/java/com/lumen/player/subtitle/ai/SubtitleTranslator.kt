@@ -34,6 +34,15 @@ class SubtitleTranslator(
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
+    /** 번역하지 못해 원문으로 남긴 줄 수와 마지막 원인. 작업이 끝날 때 사용자에게 알린다 */
+    var failedLines = 0
+        private set
+    var lastError: String? = null
+        private set
+
+    /** 서버가 JSON 모드를 거절하면(400) 이후로는 끄고 보낸다 */
+    private var useJsonMode = jsonMode
+
     /**
      * @param context 직전 대사(원문). 번역하지 않고 문맥으로만 쓴다
      * @return lines와 같은 개수의 번역문
@@ -49,9 +58,30 @@ class SubtitleTranslator(
     private suspend fun translateBatch(
         lines: List<String>, target: String, source: String, glossary: String, context: List<String>,
     ): List<String> {
-        val out = request(lines, target, source, glossary, context)
+        val out = try {
+            request(lines, target, source, glossary, context)
+        } catch (e: ApiKeyRejectedException) {
+            throw e
+        } catch (e: java.io.IOException) {
+            // 모델이 JSON을 제대로 못 만들면 Groq·OpenAI는 400으로 거절한다. JSON 모드를 끄고 한 번 더 보낸다
+            if (useJsonMode && e.message?.contains("(400)") == true) {
+                useJsonMode = false
+                return translateBatch(lines, target, source, glossary, context)
+            }
+            // 한도·네트워크 오류: 이 묶음은 원문으로 두고 다음으로 넘어간다
+            failedLines += lines.size
+            lastError = e.message
+            return lines
+        }
         if (out != null && out.size == lines.size) return out
-        if (lines.size == 1) return listOf(out?.joinToString(" ")?.takeIf { it.isNotBlank() } ?: lines[0])
+        if (lines.size == 1) {
+            val joined = out?.joinToString(" ")?.takeIf { it.isNotBlank() }
+            if (joined == null) {
+                failedLines++
+                lastError = "번역 응답을 해석하지 못했습니다"
+            }
+            return listOf(joined ?: lines[0])
+        }
         val half = lines.size / 2
         return translateBatch(lines.subList(0, half), target, source, glossary, context) +
             translateBatch(lines.subList(half, lines.size), target, source, glossary, context)
@@ -64,7 +94,7 @@ class SubtitleTranslator(
         val body = buildJsonObject {
             put("model", model)
             put("temperature", 0.2)
-            if (jsonMode) putJsonObject("response_format") { put("type", "json_object") }
+            if (useJsonMode) putJsonObject("response_format") { put("type", "json_object") }
             putJsonArray("messages") {
                 addJsonObject {
                     put("role", "system")

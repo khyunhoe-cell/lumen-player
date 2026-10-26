@@ -154,8 +154,6 @@ fun AiSettingsScreen(nav: NavController) {
     val repo = LumenApp.container.settings
     val ai = repo.settings.collectAsState().value.ai
     val scope = rememberCoroutineScope()
-    var keyInput by remember(ai.provider) { mutableStateOf("") }
-    val hasKey = repo.apiKey(ai).isNotBlank()
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         SubPageHeader(nav, "AI 자막 생성")
@@ -192,18 +190,7 @@ fun AiSettingsScreen(nav: NavController) {
                     style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted,
                 )
             }
-            OutlinedTextField(
-                keyInput, { keyInput = it },
-                singleLine = true,
-                label = { Text(if (hasKey) "API 키 (저장됨 · 바꿀 때만 입력)" else "API 키") },
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            TextButton(enabled = keyInput.isNotBlank(), onClick = {
-                scope.launch { repo.setApiKey(ai.provider, keyInput) }
-                keyInput = ""
-            }) { Text("키 저장") }
+            ApiKeyField(ai.provider)
 
             var model by remember(ai.provider, ai.models) { mutableStateOf(ai.model()) }
             OutlinedTextField(model, { model = it }, singleLine = true, label = { Text("모델") }, modifier = Modifier.fillMaxWidth())
@@ -290,20 +277,7 @@ private fun TranslationSection(ai: AiSettings) {
     if (keyOwner == ai.provider) {
         Text("음성 인식에 넣은 ${keyOwner.label} 키를 함께 씁니다.", style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted)
     } else {
-        var keyInput by remember(keyOwner) { mutableStateOf("") }
-        val hasKey = repo.apiKey(ai, keyOwner).isNotBlank()
-        OutlinedTextField(
-            keyInput, { keyInput = it },
-            singleLine = true,
-            label = { Text(if (hasKey) "${keyOwner.label} API 키 (저장됨 · 바꿀 때만 입력)" else "${keyOwner.label} API 키") },
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        TextButton(enabled = keyInput.isNotBlank(), onClick = {
-            scope.launch { repo.setApiKey(keyOwner, keyInput) }
-            keyInput = ""
-        }) { Text("키 저장") }
+        ApiKeyField(keyOwner)
     }
     var model by remember(ai.translator, ai.translationModels) { mutableStateOf(ai.translationModel()) }
     OutlinedTextField(model, { model = it }, singleLine = true, label = { Text("번역 모델") }, modifier = Modifier.fillMaxWidth())

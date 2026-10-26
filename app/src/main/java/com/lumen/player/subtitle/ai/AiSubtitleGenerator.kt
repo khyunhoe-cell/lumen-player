@@ -18,6 +18,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -62,6 +63,9 @@ class AiSubtitleGenerator(
         running = scope.launch {
             val workDir = File(context.cacheDir, "ai_audio/${System.currentTimeMillis()}")
             var extractor: Job? = null
+            var ticker: Job? = null
+            // 끝난 뒤에는 진행률 갱신이 완료·실패 상태를 덮어쓰지 않게 한다
+            val finished = java.util.concurrent.atomic.AtomicBoolean(false)
             try {
                 _job.value = AiJob(entry.uri, entry.title, AiJob.Stage.PREPARING, 0f, "준비 중")
                 val ai = settings.current().ai
@@ -85,12 +89,35 @@ class AiSubtitleGenerator(
                 val cues = mutableListOf<SubtitleCue>()
                 var transcribedMs = 0L
                 val totalMs = entry.durationMs.coerceAtLeast(1)
+                var stageText = "오디오를 추출하는 중"
+                var waitUntil = 0L
 
-                fun report(msg: String) {
-                    // 추출 30%, 인식 70% 비중으로 합친 진행률
-                    val p = (extractProgress * 0.3f + (transcribedMs.toFloat() / totalMs).coerceAtMost(1f) * 0.7f).coerceIn(0f, 0.99f)
+                fun publish() {
+                    if (finished.get()) return
+                    // 추출 20%, 인식(번역 포함) 80% 비중으로 합친 진행률
+                    val p = (extractProgress * 0.2f + (transcribedMs.toFloat() / totalMs).coerceAtMost(1f) * 0.8f).coerceIn(0f, 0.99f)
+                    val waitLeft = waitUntil - System.currentTimeMillis()
+                    val msg = buildString {
+                        append(stageText)
+                        if (extractProgress < 1f) append(" · 오디오 추출 ${(extractProgress * 100).toInt()}%")
+                        if (waitLeft > 0) append(" · 사용 한도로 ${waitLeft / 1000 + 1}초 기다리는 중")
+                    }
                     _job.value = AiJob(entry.uri, entry.title, AiJob.Stage.RUNNING, p, msg, cues.size)
                 }
+
+                fun report(msg: String) {
+                    stageText = msg
+                    publish()
+                }
+
+                // 추출 진행률과 한도 대기 시간을 0.5초마다 화면에 반영한다
+                ticker = launch {
+                    while (true) {
+                        publish()
+                        delay(500)
+                    }
+                }
+                val rateLimit = RateLimitListener { waitMs, _ -> waitUntil = System.currentTimeMillis() + waitMs }
 
                 extractor = launch(Dispatchers.IO) {
                     // 추출 오류는 채널로 넘겨 소비 쪽 for 루프에서 다시 던지게 한다 (부모 취소로 번지지 않게)
@@ -99,6 +126,7 @@ class AiSubtitleGenerator(
                             entry.uri, workDir,
                             onProgress = { extractProgress = it },
                             onChunk = { chunks.send(it) },
+                            durationHintMs = entry.durationMs,
                         )
                         chunks.close()
                     } catch (e: CancellationException) {
@@ -114,7 +142,7 @@ class AiSubtitleGenerator(
                 report("오디오를 추출하는 중")
                 for (chunk in chunks) {
                     report("음성을 인식하는 중 · ${formatTime(chunk.startMs)}부터")
-                    val segments = withContext(Dispatchers.IO) { client.transcribe(chunk.file, previousText) }
+                    val segments = withContext(Dispatchers.IO + rateLimit) { client.transcribe(chunk.file, previousText) }
                     chunk.file.delete()
                     val shifted = segments.map { s ->
                         s.copy(
@@ -125,7 +153,7 @@ class AiSubtitleGenerator(
                     }
                     val forCues = if (translator == null || shifted.isEmpty()) shifted else {
                         report("$targetName(으)로 번역하는 중 · ${formatTime(chunk.startMs)}부터")
-                        val translated = withContext(Dispatchers.IO) {
+                        val translated = withContext(Dispatchers.IO + rateLimit) {
                             translator.translate(shifted.map { it.text }, target, ai.language, ai.vocabularyPrompt, previousLines)
                         }
                         // 단어 시간은 원문 기준이라 버리고, 구간 시간 안에서 글자 수 비율로 나눈다
@@ -140,19 +168,30 @@ class AiSubtitleGenerator(
                     report("음성을 인식하는 중 · ${formatTime(transcribedMs)}까지 완료")
                 }
                 extractor?.join()
+                finished.set(true)
+                ticker?.cancel()
                 if (cues.isEmpty()) throw IllegalStateException("인식된 대사가 없습니다. 언어 설정을 확인하세요")
 
                 val lang = if (translator != null) target else ai.language.ifBlank { "auto" }
                 val file = subtitles.saveSrt(entry.uri, "${entry.title.substringBeforeLast('.')}.ai.$lang", cues)
                 val result = LoadedSubtitle(label, file.absolutePath, cues.toList())
-                _job.value = AiJob(entry.uri, entry.title, AiJob.Stage.DONE, 1f, "자막 ${cues.size}줄을 만들었습니다", cues.size)
+                val failed = translator?.failedLines ?: 0
+                val doneMsg = if (failed > 0) {
+                    "자막 ${cues.size}줄을 만들었습니다. ${failed}줄은 번역하지 못해 원문으로 남겼습니다 (${translator?.lastError})"
+                } else {
+                    "자막 ${cues.size}줄을 만들었습니다"
+                }
+                _job.value = AiJob(entry.uri, entry.title, AiJob.Stage.DONE, 1f, doneMsg, cues.size)
                 onDone(result)
             } catch (e: CancellationException) {
+                finished.set(true)
                 _job.value = _job.value?.copy(stage = AiJob.Stage.CANCELLED, message = "생성을 취소했습니다")
                 throw e
             } catch (e: Throwable) {
+                finished.set(true)
                 _job.value = AiJob(entry.uri, entry.title, AiJob.Stage.FAILED, 0f, e.message ?: e.javaClass.simpleName)
             } finally {
+                ticker?.cancel()
                 extractor?.cancel()
                 workDir.deleteRecursively()
             }
@@ -171,6 +210,14 @@ class AiSubtitleGenerator(
             TranslationProvider.CUSTOM -> ai.translationEndpoint
         }
         return SubtitleTranslator(http, baseUrl, key, ai.translationModel(), jsonMode = p != TranslationProvider.CUSTOM)
+    }
+
+    /** 생성에 필요한데 비어 있는 키의 공급자. 없으면 null */
+    fun missingKey(ai: AiSettings): SttProvider? {
+        if (ai.provider != SttProvider.CUSTOM && settings.apiKey(ai).isBlank()) return ai.provider
+        val keyOf = ai.translator.keyOf
+        if (ai.target().isNotBlank() && ai.translator != TranslationProvider.CUSTOM && settings.apiKey(ai, keyOf).isBlank()) return keyOf
+        return null
     }
 
     fun cancel() {

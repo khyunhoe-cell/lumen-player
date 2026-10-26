@@ -31,6 +31,8 @@ class AudioExtractor(private val context: Context, private val remotes: RemoteRe
         outDir: File,
         onProgress: (Float) -> Unit,
         onChunk: suspend (AudioChunk) -> Unit,
+        /** 트랙에 길이 정보가 없을 때 진행률 계산에 쓴다 */
+        durationHintMs: Long = 0,
     ) {
         outDir.mkdirs()
         val extractor = MediaExtractor()
@@ -49,7 +51,8 @@ class AudioExtractor(private val context: Context, private val remotes: RemoteRe
             extractor.selectTrack(track)
             val format = extractor.getTrackFormat(track)
             val mime = format.getString(MediaFormat.KEY_MIME)!!
-            val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else 0L
+            val durationUs = (if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else 0L)
+                .takeIf { it > 0 } ?: (durationHintMs * 1000)
             val codec = runCatching { MediaCodec.createDecoderByType(mime) }
                 .getOrElse { error("이 기기는 $mime 오디오를 해독하지 못합니다") }
             codec.configure(format, null, null, 0)
@@ -66,39 +69,46 @@ class AudioExtractor(private val context: Context, private val remotes: RemoteRe
             try {
                 while (!outputDone) {
                     coroutineContext.ensureActive()
-                    if (!inputDone) {
-                        val inIdx = codec.dequeueInputBuffer(10_000)
-                        if (inIdx >= 0) {
-                            val buf = codec.getInputBuffer(inIdx)!!
-                            val n = extractor.readSampleData(buf, 0)
-                            if (n < 0) {
-                                codec.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                                inputDone = true
-                            } else {
-                                codec.queueInputBuffer(inIdx, 0, n, extractor.sampleTime, 0)
-                                extractor.advance()
-                            }
+                    var progressed = false
+                    // 입력 버퍼가 비어 있는 만큼 한꺼번에 채운다
+                    while (!inputDone) {
+                        val inIdx = codec.dequeueInputBuffer(0)
+                        if (inIdx < 0) break
+                        val buf = codec.getInputBuffer(inIdx)!!
+                        val n = extractor.readSampleData(buf, 0)
+                        if (n < 0) {
+                            codec.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inputDone = true
+                        } else {
+                            codec.queueInputBuffer(inIdx, 0, n, extractor.sampleTime, 0)
+                            extractor.advance()
                         }
+                        progressed = true
                     }
-                    val outIdx = codec.dequeueOutputBuffer(info, 10_000)
-                    when {
-                        outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                            val of = codec.outputFormat
-                            sampleRate = of.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-                            channels = of.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-                            floatPcm = of.containsKey(MediaFormat.KEY_PCM_ENCODING) &&
-                                of.getInteger(MediaFormat.KEY_PCM_ENCODING) == AudioFormat.ENCODING_PCM_FLOAT
-                            resampler = Resampler(sampleRate, TARGET_RATE)
-                        }
-                        outIdx >= 0 -> {
-                            val out = codec.getOutputBuffer(outIdx)!!
-                            out.position(info.offset)
-                            out.limit(info.offset + info.size)
-                            val mono = toMono(out.slice().order(ByteOrder.nativeOrder()), channels, floatPcm)
-                            writer.write(resampler.process(mono))
-                            codec.releaseOutputBuffer(outIdx, false)
-                            if (durationUs > 0) onProgress((info.presentationTimeUs.toFloat() / durationUs).coerceIn(0f, 1f))
-                            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
+                    // 나온 출력도 모두 꺼낸다. 아무 진척이 없을 때만 잠깐 기다린다
+                    while (!outputDone) {
+                        val outIdx = codec.dequeueOutputBuffer(info, if (progressed) 0 else 5_000)
+                        when {
+                            outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                                val of = codec.outputFormat
+                                sampleRate = of.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                                channels = of.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                                floatPcm = of.containsKey(MediaFormat.KEY_PCM_ENCODING) &&
+                                    of.getInteger(MediaFormat.KEY_PCM_ENCODING) == AudioFormat.ENCODING_PCM_FLOAT
+                                resampler = Resampler(sampleRate, TARGET_RATE)
+                            }
+                            outIdx >= 0 -> {
+                                val out = codec.getOutputBuffer(outIdx)!!
+                                out.position(info.offset)
+                                out.limit(info.offset + info.size)
+                                val mono = toMono(out.slice().order(ByteOrder.nativeOrder()), channels, floatPcm)
+                                codec.releaseOutputBuffer(outIdx, false)
+                                writer.write(resampler.process(mono))
+                                if (durationUs > 0) onProgress((info.presentationTimeUs.toFloat() / durationUs).coerceIn(0f, 1f))
+                                if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
+                                progressed = true
+                            }
+                            else -> break // INFO_TRY_AGAIN_LATER
                         }
                     }
                 }
@@ -153,18 +163,19 @@ class AudioExtractor(private val context: Context, private val remotes: RemoteRe
             }
             val n = filtered.size
             if (n == 0) return filtered
-            val out = ArrayList<Float>((n / step).toInt() + 2)
+            val out = FloatArray(((n - t) / step).toInt() + 2)
+            var count = 0
             while (t + 1 < n) {
                 val idx = kotlin.math.floor(t).toInt()
                 val frac = (t - idx).toFloat()
                 val s0 = if (idx < 0) prev else filtered[idx]
                 val s1 = filtered[idx + 1]
-                out.add(s0 + (s1 - s0) * frac)
+                out[count++] = s0 + (s1 - s0) * frac
                 t += step
             }
             t -= n
             prev = filtered[n - 1]
-            return out.toFloatArray()
+            return if (count == out.size) out else out.copyOf(count)
         }
     }
 
@@ -190,8 +201,11 @@ class AudioExtractor(private val context: Context, private val remotes: RemoteRe
                     val rms = kotlin.math.sqrt(energyAcc / WINDOW)
                     energyAcc = 0.0
                     energyCount = 0
-                    val quietCut = samplesInChunk >= MIN_CHUNK && rms < SILENCE_RMS
-                    if (quietCut || samplesInChunk >= MAX_CHUNK) {
+                    // 첫 조각은 짧게 잘라 첫 자막이 빨리 나오게 한다
+                    val minLen = if (index == 1) FIRST_MIN_CHUNK else MIN_CHUNK
+                    val maxLen = if (index == 1) FIRST_MAX_CHUNK else MAX_CHUNK
+                    val quietCut = samplesInChunk >= minLen && rms < SILENCE_RMS
+                    if (quietCut || samplesInChunk >= maxLen) {
                         file!!.write(bytes.array(), 0, bytes.position())
                         bytes.clear()
                         close()
@@ -236,6 +250,8 @@ class AudioExtractor(private val context: Context, private val remotes: RemoteRe
     companion object {
         const val TARGET_RATE = 16_000
         private const val WINDOW = 1_600 // 100ms
+        private const val FIRST_MIN_CHUNK = TARGET_RATE * 90L // 1분 30초
+        private const val FIRST_MAX_CHUNK = TARGET_RATE * 120L // 2분
         private const val MIN_CHUNK = TARGET_RATE * 60L * 9 // 9분이 지나면 조용한 곳을 찾는다
         private const val MAX_CHUNK = TARGET_RATE * 60L * 10 // 10분이면 무조건 자른다 (약 19MB)
         private const val SILENCE_RMS = 0.01
