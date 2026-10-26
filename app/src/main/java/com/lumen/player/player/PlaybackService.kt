@@ -73,8 +73,10 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         val renderers = DefaultRenderersFactory(this)
-            // FFmpeg 오디오 디코더(DTS, AC-3, E-AC-3, TrueHD 등)를 기기 디코더보다 우선한다
-            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+            // FFmpeg 오디오 디코더는 기기에 디코더가 없는 형식(DTS, TrueHD 등)만 맡는다.
+            // FFmpeg를 앞세우면 AVI 속 MP3·AC-3처럼 프레임 경계가 어긋나거나 여러 프레임이 묶인 오디오를
+            // 풀지 못해 재생 시계가 멈추거나 재생이 실패한다
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
             .setEnableDecoderFallback(true)
         val extractors = DefaultExtractorsFactory()
             .setConstantBitrateSeekingEnabled(true)
