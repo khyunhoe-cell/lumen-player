@@ -24,6 +24,7 @@
 
 | 엔진 | 요금 | 모델 | 비고 |
 | --- | --- | --- | --- |
+| 기기 안 Whisper | 무료·오프라인 | large-v3-turbo-q5_0 등 | whisper.cpp를 앱에 넣어 휴대폰에서 인식. 모델(148–574MB)은 설정에서 한 번 받음 |
 | Groq | 무료 등급 | whisper-large-v3 / -turbo | 기본값. 429 응답이면 Retry-After를 지켜 다시 보냄 |
 | 내 서버 | 무료 | large-v3 등 | faster-whisper-server, whisper.cpp server 같은 OpenAI 호환 서버 |
 | OpenAI | 유료 | whisper-1 | 구간 타임스탬프가 있는 모델 |
@@ -54,6 +55,16 @@ app/src/main/java/com/lumen/player
 
 ## 빌드
 
+whisper.cpp(기기 안 음성 인식)는 git 서브모듈입니다. 처음 받을 때는 서브모듈까지 받으세요.
+빌드할 때 비어 있으면 Gradle이 `git submodule update --init`을 대신 실행합니다.
+
+```bash
+git clone --recurse-submodules https://github.com/khyunhoe-cell/lumen-player
+```
+
+NDK 27.2.12479018과 CMake 3.31.6이 필요합니다(Android Studio SDK Manager에서 설치).
+`assembleDebug`는 아키텍처별 APK(`app-arm64-v8a-debug.apk` 등)와 범용 APK를 함께 만듭니다. 휴대폰에는 대부분 arm64-v8a를 설치하면 됩니다.
+
 Android Studio(Ladybug 이상) 또는 명령줄:
 
 ```bash
@@ -74,4 +85,5 @@ AGP 8.7.3, Kotlin 2.1.0, compileSdk 35, minSdk 26(Android 8.0).
 - SMB는 공유 이름을 직접 입력해야 합니다(공유 목록 자동 탐색 없음).
 - Android 11 이상에서 내 기기 영상 옆의 자막 파일은 자동으로 찾지 못할 수 있어, 자막 메뉴의 "파일에서 불러오기"를 씁니다.
 - AI 자막의 오디오 추출은 기기의 MediaCodec을 씁니다. 기기가 DTS 등을 해독하지 못하면 추출이 실패합니다.
-- 기기 안에서 돌리는 Whisper(whisper.cpp JNI)는 아직 없습니다. 무료로 쓰려면 Groq 무료 등급이나 내 서버를 쓰세요.
+- 기기 안 Whisper는 클라우드보다 훨씬 느립니다. 큰 모델은 영상 길이보다 오래 걸릴 수 있습니다. arm64 빌드는 ARMv8.2 fp16이 필요해 대략 2017년 이전 CPU에서는 쓸 수 없습니다.
+- 기기 안 번역(ML Kit)은 LLM 번역보다 품질이 낮고 문맥·용어집을 반영하지 않습니다. 모델을 받을 때 Google Play 서비스가 필요합니다.

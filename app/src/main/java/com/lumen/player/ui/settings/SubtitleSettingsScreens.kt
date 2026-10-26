@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -29,6 +31,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
@@ -44,6 +47,8 @@ import com.lumen.player.data.settings.SubtitleFont
 import com.lumen.player.data.settings.SubtitlePosition
 import com.lumen.player.data.settings.SubtitleStyle
 import com.lumen.player.data.settings.TranslationProvider
+import com.lumen.player.data.settings.WhisperModel
+import com.lumen.player.subtitle.ai.ModelState
 import com.lumen.player.subtitle.ui.SubtitlePreview
 import com.lumen.player.ui.components.ColorSwatches
 import com.lumen.player.ui.components.LabeledSlider
@@ -190,36 +195,122 @@ fun AiSettingsScreen(nav: NavController) {
                     style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted,
                 )
             }
-            ApiKeyField(ai.provider)
+            if (ai.provider == SttProvider.ON_DEVICE) {
+                OnDeviceWhisperSection(ai)
+            } else {
+                ApiKeyField(ai.provider)
 
-            var model by remember(ai.provider, ai.models) { mutableStateOf(ai.model()) }
-            OutlinedTextField(model, { model = it }, singleLine = true, label = { Text("모델") }, modifier = Modifier.fillMaxWidth())
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                modelSuggestions(ai.provider).forEach { m -> LumenChip(m, model == m) { model = m } }
+                var model by remember(ai.provider, ai.models) { mutableStateOf(ai.model()) }
+                OutlinedTextField(model, { model = it }, singleLine = true, label = { Text("모델") }, modifier = Modifier.fillMaxWidth())
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    modelSuggestions(ai.provider).forEach { m -> LumenChip(m, model == m) { model = m } }
+                }
+                TextButton(onClick = { scope.launch { repo.updateAi { it.copy(models = it.models + (ai.provider to model.trim())) } } }) { Text("모델 저장") }
             }
-            TextButton(onClick = { scope.launch { repo.updateAi { it.copy(models = it.models + (ai.provider to model.trim())) } } }) { Text("모델 저장") }
 
             Label("인식 옵션")
-            var language by remember(ai.language) { mutableStateOf(ai.language) }
-            OutlinedTextField(
-                language, { language = it.lowercase().take(5) }, singleLine = true,
-                label = { Text("언어 코드 (ko, en, ja… 비우면 자동 감지)") }, modifier = Modifier.fillMaxWidth(),
-            )
-            Text("언어를 정해 주면 자동 감지보다 정확하고, 앞부분이 다른 언어로 잘못 인식되는 일이 줄어듭니다.", style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted)
-            var vocab by remember(ai.vocabularyPrompt) { mutableStateOf(ai.vocabularyPrompt) }
-            OutlinedTextField(
-                vocab, { vocab = it }, label = { Text("용어집 (인물 이름, 고유명사를 쉼표로)") },
-                minLines = 2, modifier = Modifier.fillMaxWidth(),
-            )
-            LabeledSlider("한 줄 최대 글자 수", ai.maxCharsPerLine.toFloat(), 16f..48f, "${ai.maxCharsPerLine}자") { v ->
-                scope.launch { repo.updateAi { it.copy(maxCharsPerLine = v.toInt()) } }
-            }
-            TextButton(onClick = {
-                scope.launch { repo.updateAi { it.copy(language = language.trim(), vocabularyPrompt = vocab.trim()) } }
-            }) { Text("인식 옵션 저장") }
+            RecognitionOptions(ai)
 
             TranslationSection(ai)
             Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+/** 인식 언어로 고를 수 있는 주요 언어. Whisper·Groq·OpenAI·Deepgram·ElevenLabs가 모두 지원한다 */
+private val recognitionLanguages = listOf("ko", "en", "ja", "zh", "es", "fr", "de", "ru", "pt", "it", "vi", "th", "id", "ar", "hi")
+
+private fun languageLabel(code: String) = Locale(code).getDisplayLanguage(Locale.KOREAN).ifBlank { code }
+
+private data class SaveStatus(val text: String, val ok: Boolean)
+
+/**
+ * 인식 언어(칩으로 고르고, 목록에 없으면 직접 입력)와 용어집.
+ * 저장하면 저장소에서 다시 읽어 실제로 저장됐는지 확인하고 결과를 보여 준다.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun RecognitionOptions(ai: AiSettings) {
+    val repo = LumenApp.container.settings
+    val scope = rememberCoroutineScope()
+    var language by remember(ai.language) { mutableStateOf(ai.language) }
+    var otherCode by remember(ai.language) { mutableStateOf(if (ai.language in recognitionLanguages) "" else ai.language) }
+    var vocab by remember(ai.vocabularyPrompt) { mutableStateOf(ai.vocabularyPrompt) }
+    var status by remember { mutableStateOf<SaveStatus?>(null) }
+    val codeValid = otherCode.isBlank() || Regex("^[a-z]{2,3}$").matches(otherCode)
+    val dirty = language != ai.language || vocab.trim() != ai.vocabularyPrompt
+
+    Text("인식 언어", style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        LumenChip("자동 감지", language.isBlank()) { language = ""; otherCode = ""; status = null }
+        recognitionLanguages.forEach { code ->
+            LumenChip(languageLabel(code), language == code) { language = code; otherCode = ""; status = null }
+        }
+    }
+    OutlinedTextField(
+        otherCode,
+        { v ->
+            otherCode = v.lowercase().filter { it in 'a'..'z' }.take(3)
+            status = null
+            if (Regex("^[a-z]{2,3}$").matches(otherCode)) language = otherCode
+        },
+        singleLine = true,
+        isError = !codeValid,
+        label = { Text("목록에 없는 언어 코드 (예: nl, pl, tr)") },
+        supportingText = {
+            Text(
+                when {
+                    !codeValid -> "영문 소문자 2~3자로 입력하세요"
+                    otherCode.isNotBlank() -> languageLabel(otherCode)
+                    else -> "ISO 639-1 코드"
+                },
+            )
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Text(
+        "언어를 정해 주면 자동 감지보다 정확하고, 앞부분이 다른 언어로 잘못 인식되는 일이 줄어듭니다.",
+        style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted,
+    )
+    OutlinedTextField(
+        vocab, { vocab = it; status = null }, label = { Text("용어집 (인물 이름, 고유명사를 쉼표로)") },
+        minLines = 2, modifier = Modifier.fillMaxWidth(),
+    )
+    LabeledSlider("한 줄 최대 글자 수", ai.maxCharsPerLine.toFloat(), 16f..48f, "${ai.maxCharsPerLine}자") { v ->
+        scope.launch { repo.updateAi { it.copy(maxCharsPerLine = v.toInt()) } }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(enabled = codeValid && dirty, onClick = {
+            val lang = language.trim()
+            val words = vocab.trim()
+            scope.launch {
+                status = runCatching {
+                    repo.updateAi { it.copy(language = lang, vocabularyPrompt = words) }
+                    // 저장소에서 다시 읽어 실제로 들어갔는지 확인한다
+                    val saved = repo.current().ai
+                    check(saved.language == lang && saved.vocabularyPrompt == words) { "저장한 값이 다시 읽히지 않습니다" }
+                    val terms = words.split(',', '\n').count { it.isNotBlank() }
+                    SaveStatus(
+                        "저장했습니다 · 인식 언어 ${if (lang.isBlank()) "자동 감지" else languageLabel(lang)}" +
+                            if (terms > 0) " · 용어 ${terms}개" else "",
+                        ok = true,
+                    )
+                }.getOrElse { SaveStatus("저장하지 못했습니다: ${it.message}", ok = false) }
+            }
+        }) { Text("인식 옵션 저장") }
+        when {
+            status != null -> Text(
+                status!!.text,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (status!!.ok) Lumen.Primary else Lumen.Error,
+                modifier = Modifier.weight(1f),
+            )
+            dirty -> Text(
+                "저장하지 않은 변경이 있습니다",
+                style = MaterialTheme.typography.bodySmall,
+                color = Lumen.Amber,
+                modifier = Modifier.weight(1f),
+            )
         }
     }
 }
@@ -273,8 +364,14 @@ private fun TranslationSection(ai: AiSettings) {
         )
         TextButton(onClick = { scope.launch { repo.updateAi { it.copy(translationEndpoint = endpoint.trim()) } } }) { Text("주소 저장") }
     }
+    if (ai.translator == TranslationProvider.ON_DEVICE) {
+        OnDeviceTranslationPrefetch(source = ai.language, target = target)
+        return
+    }
     val keyOwner = ai.translator.keyOf
-    if (keyOwner == ai.provider) {
+    if (!ai.translator.needsKey) {
+        // 내 서버는 키 없이도 쓸 수 있다
+    } else if (keyOwner == ai.provider) {
         Text("음성 인식에 넣은 ${keyOwner.label} 키를 함께 씁니다.", style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted)
     } else {
         ApiKeyField(keyOwner)
@@ -289,10 +386,33 @@ private fun TranslationSection(ai: AiSettings) {
     }) { Text("모델 저장") }
 }
 
+/** 인터넷이 없을 때도 쓰도록 번역 모델을 미리 받는다 */
+@Composable
+private fun OnDeviceTranslationPrefetch(source: String, target: String) {
+    val scope = rememberCoroutineScope()
+    var status by remember(source, target) { mutableStateOf<String?>(null) }
+    if (source.isBlank()) {
+        Text(
+            "인식 언어를 자동 감지로 두면 첫 대사로 언어를 알아낸 뒤 모델을 받습니다. 인식 언어를 정하면 여기서 미리 받아 둘 수 있습니다.",
+            style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted,
+        )
+        return
+    }
+    TextButton(onClick = {
+        status = "${Locale(source).displayLanguage} → ${Locale(target).displayLanguage} 모델을 받는 중"
+        scope.launch {
+            status = runCatching { com.lumen.player.subtitle.ai.MlKitTranslator.prefetch(source, target) }
+                .fold({ "번역 모델을 받았습니다. 이제 인터넷 없이 번역합니다" }, { "모델을 받지 못했습니다: ${it.message}" })
+        }
+    }) { Text("번역 모델 미리 받기") }
+    status?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted) }
+}
+
 private fun translationModelSuggestions(p: TranslationProvider) = when (p) {
     TranslationProvider.GROQ -> listOf("llama-3.3-70b-versatile", "openai/gpt-oss-120b")
     TranslationProvider.OPENAI -> listOf("gpt-4.1-mini", "gpt-4.1")
     TranslationProvider.CUSTOM -> listOf("qwen2.5:7b", "gemma3:12b")
+    TranslationProvider.ON_DEVICE -> emptyList()
 }
 
 private fun modelSuggestions(p: SttProvider) = when (p) {
@@ -301,6 +421,65 @@ private fun modelSuggestions(p: SttProvider) = when (p) {
     SttProvider.DEEPGRAM -> listOf("nova-3", "nova-2")
     SttProvider.ELEVENLABS -> listOf("scribe_v1")
     SttProvider.CUSTOM -> listOf("whisper-large-v3", "large-v3", "Systran/faster-whisper-large-v3")
+    SttProvider.ON_DEVICE -> WhisperModel.entries.map { it.id }
+}
+
+/** 기기 안 Whisper: 모델을 고르고 받고 지운다. 받는 중에는 진행률을 보여 준다 */
+@Composable
+private fun OnDeviceWhisperSection(ai: AiSettings) {
+    val container = LumenApp.container
+    val repo = container.settings
+    val scope = rememberCoroutineScope()
+    val states by container.whisperModels.states.collectAsState()
+    val selected = WhisperModel.byId(ai.model())
+    val unavailable = remember { com.lumen.player.subtitle.ai.WhisperNative.unavailableReason() }
+
+    if (unavailable != null) {
+        Text(unavailable, style = MaterialTheme.typography.bodySmall, color = Lumen.Error)
+        return
+    }
+    Text(
+        "모델을 한 번 받아 두면 인터넷 없이 인식합니다. 큰 모델일수록 정확하지만 느리고, 영상 길이보다 오래 걸릴 수 있습니다. 와이파이에서 받으세요.",
+        style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted,
+    )
+    WhisperModel.entries.forEach { m ->
+        val st = states[m] ?: ModelState(false)
+        Surface(
+            onClick = { scope.launch { repo.updateAi { it.copy(models = it.models + (SttProvider.ON_DEVICE to m.id)) } } },
+            color = if (selected == m) Lumen.PrimaryContainer else Lumen.Surface,
+            shape = RoundedCornerShape(16.dp),
+        ) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+                Text("${m.id} · 약 ${m.sizeMb}MB", style = MaterialTheme.typography.titleSmall)
+                Text(m.note, style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted)
+                when {
+                    st.progress != null -> {
+                        LinearProgressIndicator(
+                            progress = { st.progress },
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                            color = Lumen.Primary,
+                            trackColor = Lumen.Hairline,
+                        )
+                        Row {
+                            Text("받는 중 ${(st.progress * 100).toInt()}%", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f).padding(top = 12.dp))
+                            TextButton(onClick = { container.whisperModels.cancel(m) }) { Text("취소") }
+                        }
+                    }
+                    st.downloaded -> Row {
+                        Text("받아 둠", style = MaterialTheme.typography.bodySmall, color = Lumen.Primary, modifier = Modifier.weight(1f).padding(top = 12.dp))
+                        TextButton(onClick = { container.whisperModels.delete(m) }) { Text("지우기") }
+                    }
+                    else -> Row {
+                        Text(st.error ?: "아직 받지 않음", style = MaterialTheme.typography.bodySmall, color = if (st.error != null) Lumen.Error else Lumen.TextMuted, modifier = Modifier.weight(1f).padding(top = 12.dp))
+                        TextButton(onClick = { container.whisperModels.download(m) }) { Text("받기") }
+                    }
+                }
+            }
+        }
+    }
+    ToggleRow("정확도 우선", "빔 서치로 더 정확하게 인식합니다 · 2~3배 느려짐", ai.onDeviceAccurate) { v ->
+        scope.launch { repo.updateAi { it.copy(onDeviceAccurate = v) } }
+    }
 }
 
 @Composable

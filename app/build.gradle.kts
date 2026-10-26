@@ -9,6 +9,7 @@ plugins {
 android {
     namespace = "com.lumen.player"
     compileSdk = 35
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "com.lumen.player"
@@ -34,6 +35,23 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+    // ML Kit 번역과 whisper 네이티브 라이브러리 때문에 범용 APK가 120MB를 넘는다.
+    // 휴대폰에는 대부분 arm64-v8a APK(약 40MB)를 설치하면 된다
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = true
+        }
+    }
+    // 기기 안 음성 인식(whisper.cpp)
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.31.6"
+        }
     }
     lint {
         // Media3의 @UnstableApi는 의도적으로 사용한다
@@ -97,7 +115,21 @@ dependencies {
     implementation(libs.commons.net)
     implementation(libs.nfs.client)
 
+    // 기기 안 번역
+    implementation(libs.mlkit.translate)
+    implementation(libs.mlkit.language.id)
+    implementation(libs.coroutines.play.services)
+
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.okhttp.mockwebserver)
 }
+
+// whisper.cpp는 git 서브모듈이다. git pull만 하고 서브모듈을 안 받았으면 빌드 전에 받아 온다
+val initWhisperSubmodule by tasks.registering(Exec::class) {
+    val marker = file("src/main/cpp/whisper.cpp/CMakeLists.txt")
+    onlyIf { !marker.exists() && rootProject.file(".git").exists() }
+    workingDir = rootProject.projectDir
+    commandLine("git", "submodule", "update", "--init", "--depth", "1", "app/src/main/cpp/whisper.cpp")
+}
+tasks.named("preBuild") { dependsOn(initWhisperSubmodule) }
