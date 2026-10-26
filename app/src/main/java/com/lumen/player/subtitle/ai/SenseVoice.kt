@@ -4,19 +4,20 @@ package com.lumen.player.subtitle.ai
 data class ModelFile(val name: String, val url: String, val size: Long, val sha256: String)
 
 /**
- * 기기 안 SenseVoice 인식에 쓰는 sherpa-onnx 모델(SenseVoice int8 + Silero VAD)과 순수 계산 부분.
+ * 기기 안 SenseVoice 인식에 쓰는 sherpa-onnx 모델(SenseVoice Small int8 + Silero VAD)과 순수 계산 부분.
  * 출처: k2-fsa/sherpa-onnx 공식 배포(Hugging Face csukuangfj 저장소는 커밋 해시로 고정, GitHub asr-models 릴리스).
+ * 같은 저장소의 int8-2025-09-09 모델은 광둥어 전용 미세 조정본(WSYue)이라 모든 말을 광둥어로 받아 적으므로 쓰지 않는다.
  */
 object SenseVoice {
     const val SAMPLE_RATE = 16_000
-    const val DIR_NAME = "sherpa/sense-voice-int8-2025-09-09"
+    const val DIR_NAME = "sherpa/sense-voice-int8-2024-07-17"
 
-    private const val HF = "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09" +
-        "/resolve/355f4d4884d8afd08aef04b9007a8556d7b463b2"
+    private const val HF = "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17" +
+        "/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07"
 
     val MODEL = ModelFile(
-        "model.int8.onnx", "$HF/model.int8.onnx", 237_115_547,
-        "12ca1a2ae7ecf3e0019ef2822307ee0b5cadc9196569e379b4c4026f8205276d",
+        "model.int8.onnx", "$HF/model.int8.onnx", 239_233_841,
+        "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51",
     )
     val TOKENS = ModelFile(
         "tokens.txt", "$HF/tokens.txt", 315_894,

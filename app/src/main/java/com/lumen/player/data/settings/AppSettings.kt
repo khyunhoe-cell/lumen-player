@@ -62,7 +62,7 @@ enum class SttProvider(
     ),
     SENSE_VOICE(
         "기기 안 SenseVoice", true, "sense-voice-int8",
-        "인터넷 없이 휴대폰에서 빠르게 인식 · 한국어·영어·일본어·중국어·광둥어만 · 모델 약 238MB", needsKey = false,
+        "인터넷 없이 휴대폰에서 빠르게 인식 · 한국어·영어·일본어·중국어·광둥어만 · 모델 약 240MB", needsKey = false,
     ),
 }
 

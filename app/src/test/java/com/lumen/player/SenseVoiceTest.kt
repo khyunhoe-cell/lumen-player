@@ -38,9 +38,9 @@ class SenseVoiceTest {
     }
 
     @Test fun modelFilesArePinned() {
-        assertEquals(238_075_295L, SenseVoice.totalSize)
+        assertEquals(240_193_589L, SenseVoice.totalSize)
         assertTrue(SenseVoice.FILES.all { it.sha256.length == 64 })
-        assertTrue(SenseVoice.MODEL.url.contains("/resolve/355f4d4884d8afd08aef04b9007a8556d7b463b2/"))
+        assertTrue(SenseVoice.MODEL.url.contains("zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/"))
         assertFalse(SttProvider.SENSE_VOICE.needsKey)
     }
 }
