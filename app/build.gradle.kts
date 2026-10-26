@@ -64,9 +64,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
     buildFeatures {
         compose = true
     }
@@ -110,6 +107,12 @@ android {
     }
 }
 
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
@@ -141,6 +144,9 @@ dependencies {
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
+    // 로컬 AI 번역(Gemma 4·Qwen 2.5)과 Claude 번역
+    implementation(libs.litertlm.android)
+    implementation(libs.anthropic.java)
     implementation(libs.datastore.preferences)
 
     implementation(libs.coroutines.android)

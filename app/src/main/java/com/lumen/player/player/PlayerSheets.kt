@@ -64,7 +64,7 @@ import androidx.media3.common.C
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
 import com.lumen.player.LumenApp
-import com.lumen.player.data.settings.SttProvider
+import com.lumen.player.data.settings.KeySlot
 import com.lumen.player.data.settings.SubtitleFont
 import com.lumen.player.data.settings.SubtitlePosition
 import com.lumen.player.subtitle.ai.AiJob
@@ -162,7 +162,7 @@ fun SubtitleSheet(service: PlaybackService, state: PlayerUiState, onDismiss: () 
         else -> "내장 자막 ${textGroups.size}개"
     }
 
-    var needKey by remember { mutableStateOf<SttProvider?>(null) }
+    var needKey by remember { mutableStateOf<KeySlot?>(null) }
     fun startAi() {
         scope.launch {
             // 방금 저장한 키도 보이도록 화면 상태 대신 저장소에서 최신 설정을 읽는다

@@ -43,16 +43,78 @@ interface TranslationEngine {
     fun close() {}
 }
 
-class SubtitleTranslator(
+/** 번역 요청 한 번(시스템 지시문 + 요청 글)을 보내고 답 글을 받는 통로. 공급자마다 하나씩 둔다 */
+interface ChatBackend {
+    /** 답을 해석하지 못하면 null */
+    suspend fun complete(model: String, system: String, user: String, jsonMode: Boolean): String?
+
+    /** 모델이 없어졌을 때 대신 쓸 모델을 고르려고 서버가 가진 모델 ID를 받는다 */
+    suspend fun listModels(): List<String>
+
+    fun close() {}
+}
+
+/** OpenAI 호환 /chat/completions (Groq, OpenAI, DeepSeek, 내 서버) */
+class OpenAiChatBackend(
     private val http: OkHttpClient,
     private val baseUrl: String,
     private val apiKey: String,
+) : ChatBackend {
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    private val jsonType = "application/json; charset=utf-8".toMediaType()
+
+    override suspend fun complete(model: String, system: String, user: String, jsonMode: Boolean): String? {
+        val body = buildJsonObject {
+            put("model", model)
+            put("temperature", 0.2)
+            if (jsonMode) putJsonObject("response_format") { put("type", "json_object") }
+            putJsonArray("messages") {
+                addJsonObject {
+                    put("role", "system")
+                    put("content", system)
+                }
+                addJsonObject {
+                    put("role", "user")
+                    put("content", user)
+                }
+            }
+        }.toString()
+        val text = http.executeWithRetry("자막 번역") {
+            Request.Builder().url(baseUrl.trimEnd('/') + "/chat/completions")
+                .apply { if (apiKey.isNotBlank()) header("Authorization", "Bearer $apiKey") }
+                .post(body.toRequestBody(jsonType))
+                .build()
+        }
+        return runCatching {
+            json.parseToJsonElement(text).jsonObject["choices"]!!.jsonArray[0]
+                .jsonObject["message"]!!.jsonObject["content"]!!.jsonPrimitive.content
+        }.getOrNull()
+    }
+
+    override suspend fun listModels(): List<String> {
+        val text = http.executeWithRetry("모델 목록") {
+            Request.Builder().url(baseUrl.trimEnd('/') + "/models")
+                .apply { if (apiKey.isNotBlank()) header("Authorization", "Bearer $apiKey") }
+                .build()
+        }
+        return json.parseToJsonElement(text).jsonObject["data"]!!.jsonArray
+            .mapNotNull { it.jsonObject["id"]?.jsonPrimitive?.contentOrNull }
+    }
+}
+
+/**
+ * 여러 줄을 한 번에 보내 번역한다. 줄 수를 그대로 지키게 하고,
+ * 모델이 줄을 합치거나 쪼개서 개수가 어긋나면 묶음을 반으로 나눠 다시 보낸다.
+ */
+class SubtitleTranslator(
+    private val backend: ChatBackend,
     private val model: String,
     /** response_format=json_object를 보낼지. 일부 로컬 서버는 이 옵션을 거부한다 */
     private val jsonMode: Boolean = true,
 ) : TranslationEngine {
-    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
-    private val jsonType = "application/json; charset=utf-8".toMediaType()
+
+    constructor(http: OkHttpClient, baseUrl: String, apiKey: String, model: String, jsonMode: Boolean = true) :
+        this(OpenAiChatBackend(http, baseUrl, apiKey), model, jsonMode)
 
     override var failedLines = 0
         private set
@@ -92,7 +154,7 @@ class SubtitleTranslator(
             // 모델이 없어졌으면 줄마다 실패하지 말고 한 번만 대체 모델을 찾는다. 없으면 작업을 멈춘다
             val replacement = if (triedReplacement) null else {
                 triedReplacement = true
-                runCatching { pickReplacement(listModels(), currentModel) }.getOrNull()
+                runCatching { pickReplacement(backend.listModels(), currentModel) }.getOrNull()
             }
             if (replacement == null) {
                 throw ModelNotFoundException(
@@ -131,54 +193,23 @@ class SubtitleTranslator(
     private suspend fun request(
         lines: List<String>, target: String, source: String, glossary: String, context: List<String>,
     ): List<String>? {
-        val body = buildJsonObject {
-            put("model", currentModel)
-            put("temperature", 0.2)
-            if (useJsonMode) putJsonObject("response_format") { put("type", "json_object") }
-            putJsonArray("messages") {
-                addJsonObject {
-                    put("role", "system")
-                    put("content", systemPrompt(target, source, glossary))
-                }
-                addJsonObject {
-                    put("role", "user")
-                    put("content", buildJsonObject {
-                        if (context.isNotEmpty()) putJsonArray("context") { context.forEach { add(it) } }
-                        putJsonArray("lines") { lines.forEach { add(it) } }
-                    }.toString())
-                }
-            }
+        val user = buildJsonObject {
+            if (context.isNotEmpty()) putJsonArray("context") { context.forEach { add(it) } }
+            putJsonArray("lines") { lines.forEach { add(it) } }
         }.toString()
-        val text = http.executeWithRetry("자막 번역") {
-            Request.Builder().url(baseUrl.trimEnd('/') + "/chat/completions")
-                .apply { if (apiKey.isNotBlank()) header("Authorization", "Bearer $apiKey") }
-                .post(body.toRequestBody(jsonType))
-                .build()
-        }
-        val content = runCatching {
-            json.parseToJsonElement(text).jsonObject["choices"]!!.jsonArray[0]
-                .jsonObject["message"]!!.jsonObject["content"]!!.jsonPrimitive.content
-        }.getOrNull() ?: return null
+        val content = backend.complete(currentModel, systemPrompt(target, source, glossary), user, useJsonMode) ?: return null
         return parseLines(content)
     }
 
-    /** OpenAI 호환 GET /models의 모델 ID 목록 */
-    private suspend fun listModels(): List<String> {
-        val text = http.executeWithRetry("모델 목록") {
-            Request.Builder().url(baseUrl.trimEnd('/') + "/models")
-                .apply { if (apiKey.isNotBlank()) header("Authorization", "Bearer $apiKey") }
-                .build()
-        }
-        return json.parseToJsonElement(text).jsonObject["data"]!!.jsonArray
-            .mapNotNull { it.jsonObject["id"]?.jsonPrimitive?.contentOrNull }
-    }
+    override fun close() = backend.close()
 
     companion object {
         private const val BATCH = 40
 
         /** 번역에 쓸 만한 순서. 앞에 있을수록 먼저 고른다 */
         private val preferredModels = listOf(
-            "openai/gpt-oss-120b", "gpt-4.1-mini", "gpt-4o-mini", "openai/gpt-oss-20b", "gpt-4.1", "gpt-4o",
+            "openai/gpt-oss-120b", "gpt-4.1-mini", "gpt-4o-mini", "deepseek-flash", "claude-opus-5-5",
+            "openai/gpt-oss-20b", "gpt-4.1", "gpt-4o", "deepseek-v4-pro", "claude-sonnet-5-5", "claude-haiku-5-5",
         )
 
         /** 음성·임베딩·안전 검사처럼 글 번역에 쓸 수 없는 모델 */

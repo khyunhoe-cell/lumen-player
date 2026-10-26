@@ -24,6 +24,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lumen.player.LumenApp
+import com.lumen.player.data.settings.KeySlot
 import com.lumen.player.data.settings.SttProvider
 import com.lumen.player.ui.theme.Lumen
 import kotlinx.coroutines.launch
@@ -38,7 +39,11 @@ private fun mask(key: String) = if (key.length <= 10) "•".repeat(key.length) e
  * 공급자에게 확인 요청을 보낸다. 저장된 키는 가려서 보여 준다.
  */
 @Composable
-fun ApiKeyField(provider: SttProvider, modifier: Modifier = Modifier, onSaved: () -> Unit = {}) {
+fun ApiKeyField(provider: SttProvider, modifier: Modifier = Modifier, onSaved: () -> Unit = {}) =
+    ApiKeyField(KeySlot.Stt(provider), modifier, onSaved)
+
+@Composable
+fun ApiKeyField(provider: KeySlot, modifier: Modifier = Modifier, onSaved: () -> Unit = {}) {
     val container = LumenApp.container
     val repo = container.settings
     val ai = repo.settings.collectAsState().value.ai

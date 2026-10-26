@@ -1,7 +1,9 @@
 package com.lumen.player.subtitle.ai
 
 import com.lumen.player.data.settings.AiSettings
+import com.lumen.player.data.settings.KeySlot
 import com.lumen.player.data.settings.SttProvider
+import com.lumen.player.data.settings.TranslationProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -19,6 +21,26 @@ import java.io.IOException
  */
 class ApiKeyChecker(private val http: OkHttpClient) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+
+    suspend fun check(slot: KeySlot, key: String, ai: AiSettings): Result<String> = when (slot) {
+        is KeySlot.Stt -> check(slot.provider, key, ai)
+        is KeySlot.Translation -> withContext(Dispatchers.IO) {
+            runCatching {
+                when (slot.provider) {
+                    TranslationProvider.DEEPSEEK -> checkModels("https://api.deepseek.com", key, ai.translationModel(slot.provider))
+                    TranslationProvider.CLAUDE -> {
+                        get(
+                            Request.Builder().url("https://api.anthropic.com/v1/models")
+                                .header("x-api-key", key)
+                                .header("anthropic-version", "2023-06-01"),
+                        )
+                        "키가 확인되었습니다"
+                    }
+                    else -> "키가 필요 없습니다"
+                }
+            }
+        }
+    }
 
     suspend fun check(provider: SttProvider, key: String, ai: AiSettings): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
@@ -51,7 +73,7 @@ class ApiKeyChecker(private val http: OkHttpClient) {
         }.getOrDefault(emptyList())
         return when {
             ids.isEmpty() || model in ids -> "키가 확인되었습니다 · 모델 $model"
-            else -> "키는 맞지만 모델 '$model'이(가) 목록에 없습니다. 사용할 수 있는 음성 모델: " +
+            else -> "키는 맞지만 모델 '$model'이(가) 목록에 없습니다. 사용할 수 있는 모델: " +
                 ids.filter { "whisper" in it || "transcribe" in it }.ifEmpty { ids.take(5) }.joinToString()
         }
     }

@@ -45,10 +45,23 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
     fun apiKey(ai: AiSettings, provider: SttProvider = ai.provider): String =
         ai.sealedKeys[provider]?.let(SecretBox::open).orEmpty()
 
+    fun apiKey(ai: AiSettings, slot: KeySlot): String = when (slot) {
+        is KeySlot.Stt -> apiKey(ai, slot.provider)
+        is KeySlot.Translation -> ai.sealedTranslationKeys[slot.provider]?.let(SecretBox::open).orEmpty()
+    }
+
     /** 저장한 뒤 다시 읽어 같은 값이 나오는지까지 확인한다. */
-    suspend fun setApiKey(provider: SttProvider, plain: String): Boolean {
+    suspend fun setApiKey(provider: SttProvider, plain: String): Boolean = setApiKey(KeySlot.Stt(provider), plain)
+
+    suspend fun setApiKey(slot: KeySlot, plain: String): Boolean {
         val key = plain.trim()
-        updateAi { it.copy(sealedKeys = it.sealedKeys + (provider to SecretBox.seal(key))) }
-        return apiKey(current().ai, provider) == key
+        val sealed = SecretBox.seal(key)
+        updateAi {
+            when (slot) {
+                is KeySlot.Stt -> it.copy(sealedKeys = it.sealedKeys + (slot.provider to sealed))
+                is KeySlot.Translation -> it.copy(sealedTranslationKeys = it.sealedTranslationKeys + (slot.provider to sealed))
+            }
+        }
+        return apiKey(current().ai, slot) == key
     }
 }

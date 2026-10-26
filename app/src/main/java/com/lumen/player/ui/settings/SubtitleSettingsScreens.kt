@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.lumen.player.LumenApp
 import com.lumen.player.data.settings.AiSettings
+import com.lumen.player.data.settings.KeySlot
 import com.lumen.player.data.settings.SecretBox
 import com.lumen.player.data.settings.SttProvider
 import com.lumen.player.data.settings.SubtitleFont
@@ -370,13 +371,17 @@ private fun TranslationSection(ai: AiSettings) {
         OnDeviceTranslationPrefetch(source = ai.language, target = target)
         return
     }
-    val keyOwner = ai.translator.keyOf
+    if (ai.translator == TranslationProvider.LOCAL_LLM) {
+        LocalLlmSection(ai)
+        return
+    }
+    val slot = ai.translator.keySlot
     if (!ai.translator.needsKey) {
         // 내 서버는 키 없이도 쓸 수 있다
-    } else if (keyOwner == ai.provider) {
-        Text("음성 인식에 넣은 ${keyOwner.label} 키를 함께 씁니다.", style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted)
+    } else if (slot is KeySlot.Stt && slot.provider == ai.provider) {
+        Text("음성 인식에 넣은 ${slot.label} 키를 함께 씁니다.", style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted)
     } else {
-        ApiKeyField(keyOwner)
+        ApiKeyField(slot)
     }
     var model by remember(ai.translator, ai.translationModels) { mutableStateOf(ai.translationModel()) }
     OutlinedTextField(model, { model = it }, singleLine = true, label = { Text("번역 모델") }, modifier = Modifier.fillMaxWidth())
@@ -410,11 +415,64 @@ private fun OnDeviceTranslationPrefetch(source: String, target: String) {
     status?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted) }
 }
 
+/** 로컬 AI: 모델을 고르고 받고 지운다. 받는 중에는 진행률을 보여 준다 */
+@Composable
+private fun LocalLlmSection(ai: AiSettings) {
+    val container = LumenApp.container
+    val repo = container.settings
+    val scope = rememberCoroutineScope()
+    val states by container.localLlmModels.states.collectAsState()
+    val selected = com.lumen.player.subtitle.ai.LocalLlmModels.find(ai.translationModel())
+    Text(
+        "모델을 한 번 받아 두면 인터넷 없이 휴대폰에서 번역합니다. 앞 대사 몇 줄을 문맥으로 보고 한 줄씩 번역해 클라우드보다 느리고, " +
+            "배터리를 많이 쓰고 휴대폰이 뜨거워질 수 있습니다. 다른 언어 글자가 섞여 나온 줄은 기기 안 번역(ML Kit)으로 대신합니다. 와이파이에서 받으세요.",
+        style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted,
+    )
+    com.lumen.player.subtitle.ai.LocalLlmModels.all.forEach { m ->
+        val st = states[m.id] ?: ModelState(false)
+        Surface(
+            onClick = { scope.launch { repo.updateAi { it.copy(translationModels = it.translationModels + (TranslationProvider.LOCAL_LLM to m.id)) } } },
+            color = if (selected == m) Lumen.PrimaryContainer else Lumen.Surface,
+            shape = RoundedCornerShape(16.dp),
+        ) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+                Text("${m.label} · 약 ${m.file.size / 1_000_000}MB", style = MaterialTheme.typography.titleSmall)
+                Text(m.note, style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted)
+                val progress = st.progress
+                when {
+                    progress != null -> {
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                            color = Lumen.Primary,
+                            trackColor = Lumen.Hairline,
+                        )
+                        Row {
+                            Text("받는 중 ${(progress * 100).toInt()}%", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f).padding(top = 12.dp))
+                            TextButton(onClick = { container.localLlmModels.cancel(m) }) { Text("취소") }
+                        }
+                    }
+                    st.downloaded -> Row {
+                        Text("받아 둠", style = MaterialTheme.typography.bodySmall, color = Lumen.Primary, modifier = Modifier.weight(1f).padding(top = 12.dp))
+                        TextButton(onClick = { container.localLlmModels.delete(m) }) { Text("지우기") }
+                    }
+                    else -> Row {
+                        Text(st.error ?: "아직 받지 않음", style = MaterialTheme.typography.bodySmall, color = if (st.error != null) Lumen.Error else Lumen.TextMuted, modifier = Modifier.weight(1f).padding(top = 12.dp))
+                        TextButton(onClick = { container.localLlmModels.download(m) }) { Text("받기") }
+                    }
+                }
+            }
+        }
+    }
+}
+
 private fun translationModelSuggestions(p: TranslationProvider) = when (p) {
     TranslationProvider.GROQ -> listOf("openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b")
     TranslationProvider.OPENAI -> listOf("gpt-4.1-mini", "gpt-4.1")
+    TranslationProvider.DEEPSEEK -> listOf("deepseek-flash", "deepseek-v4-pro")
+    TranslationProvider.CLAUDE -> com.lumen.player.subtitle.ai.ClaudeModels.suggestions
     TranslationProvider.CUSTOM -> listOf("qwen2.5:7b", "gemma3:12b")
-    TranslationProvider.ON_DEVICE -> emptyList()
+    TranslationProvider.LOCAL_LLM, TranslationProvider.ON_DEVICE -> emptyList()
 }
 
 private fun modelSuggestions(p: SttProvider) = when (p) {
