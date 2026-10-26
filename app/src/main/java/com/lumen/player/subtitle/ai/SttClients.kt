@@ -3,6 +3,9 @@ package com.lumen.player.subtitle.ai
 import com.lumen.player.data.settings.AiSettings
 import com.lumen.player.data.settings.SttProvider
 import kotlinx.coroutines.delay
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.coroutineContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -31,7 +34,37 @@ interface SttClient {
 private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 private val wav = "audio/wav".toMediaType()
 
-/** 무료 등급의 분당 요청 제한(429)에 걸리면 Retry-After 만큼 기다렸다가 다시 보낸다. */
+/** 키가 거절된 경우. 다시 시도해도 소용없으니 작업 전체를 멈춘다 */
+class ApiKeyRejectedException(message: String) : IOException(message)
+
+/** 사용 한도 때문에 오래 기다려야 하는 경우 */
+class RateLimitException(message: String) : IOException(message)
+
+/** 한도에 걸려 기다릴 때 화면에 알리고 싶으면 코루틴 컨텍스트에 넣는다 */
+class RateLimitListener(val onWait: (waitMs: Long, what: String) -> Unit) :
+    AbstractCoroutineContextElement(RateLimitListener) {
+    companion object Key : CoroutineContext.Key<RateLimitListener>
+}
+
+/** "12", "7.66s", "2m59.56s", "1h2m3s", "try again in 1m30.5s" 같은 표기를 밀리초로 바꾼다 */
+internal fun parseWaitMs(text: String?): Long? {
+    if (text.isNullOrBlank()) return null
+    text.trim().toDoubleOrNull()?.let { return (it * 1000).toLong() }
+    val m = Regex("""(?:(\d+)h)?(?:(\d+)m(?!s))?(?:([\d.]+)s)?""").findAll(text)
+        .firstOrNull { it.value.isNotEmpty() } ?: return null
+    val h = m.groupValues[1].toLongOrNull() ?: 0
+    val min = m.groupValues[2].toLongOrNull() ?: 0
+    val sec = m.groupValues[3].toDoubleOrNull() ?: 0.0
+    return h * 3_600_000 + min * 60_000 + (sec * 1000).toLong()
+}
+
+/** 이보다 오래 기다려야 하면 기다리지 않고 알린다 */
+private const val MAX_WAIT_MS = 15 * 60_000L
+
+/**
+ * 요청 한도(429)나 서버 오류(5xx)면 공급자가 알려 준 시간만큼 기다렸다가 다시 보낸다.
+ * Groq 무료 등급은 시간당 오디오 길이에도 한도가 있어 몇 분씩 기다려야 할 때가 있다.
+ */
 internal suspend fun OkHttpClient.executeWithRetry(what: String = "음성 인식", build: () -> Request): String {
     var attempt = 0
     while (true) {
@@ -39,12 +72,19 @@ internal suspend fun OkHttpClient.executeWithRetry(what: String = "음성 인식
         val body = resp.use { it.body?.string().orEmpty() }
         when {
             resp.isSuccessful -> return body
-            (resp.code == 429 || resp.code >= 500) && attempt < 5 -> {
-                val wait = resp.header("Retry-After")?.toDoubleOrNull()?.times(1000)?.toLong() ?: (2_000L shl attempt)
-                delay(wait.coerceAtMost(60_000))
+            (resp.code == 429 || resp.code >= 500) && attempt < 6 -> {
+                val hinted = parseWaitMs(resp.header("Retry-After"))
+                    ?: parseWaitMs(Regex("""try again in ([\dhms.]+)""").find(body)?.groupValues?.get(1))
+                val wait = (hinted ?: (2_000L shl attempt)) + 500
+                if (wait > MAX_WAIT_MS) {
+                    throw RateLimitException("$what 사용 한도를 다 썼습니다. 약 ${wait / 60_000 + 1}분 뒤에 다시 시도하세요")
+                }
+                coroutineContext[RateLimitListener]?.onWait?.invoke(wait, what)
+                delay(wait)
                 attempt++
             }
-            resp.code == 401 || resp.code == 403 -> throw IOException("API 키가 올바르지 않습니다 (${resp.code})")
+            resp.code == 429 -> throw RateLimitException("$what 사용 한도에 걸렸습니다. 잠시 뒤 다시 시도하세요")
+            resp.code == 401 || resp.code == 403 -> throw ApiKeyRejectedException("$what: API 키가 올바르지 않습니다 (${resp.code})")
             resp.code == 413 -> throw IOException("오디오 조각이 공급자의 크기 제한을 넘었습니다")
             else -> throw IOException("$what 요청 실패 (${resp.code}): ${body.take(300)}")
         }

@@ -79,3 +79,53 @@ class TranslatorTest {
         assertEquals("Japanese", SubtitleTranslator.languageName("ja"))
     }
 }
+
+class TranslatorRobustnessTest {
+    private val http = OkHttpClient.Builder().proxy(java.net.Proxy.NO_PROXY).build()
+
+    private fun chat(content: String) = MockResponse().setBody(
+        """{"choices":[{"message":{"role":"assistant","content":${JsonPrimitive(content)}}}]}""",
+    )
+
+    @Test fun retriesWithoutJsonModeOn400() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(400).setBody("""{"error":{"code":"json_validate_failed"}}"""))
+        server.enqueue(chat("""{"lines": ["하나", "둘"]}"""))
+        server.start()
+        val t = SubtitleTranslator(http, server.url("/v1").toString(), "KEY", "m", jsonMode = true)
+        assertEquals(listOf("하나", "둘"), t.translate(listOf("one", "two"), "ko"))
+        assertTrue(server.takeRequest().body.readUtf8().contains("response_format"))
+        assertTrue(!server.takeRequest().body.readUtf8().contains("response_format"))
+        assertEquals(0, t.failedLines)
+        server.shutdown()
+    }
+
+    @Test fun keepsOriginalsWhenServerFails() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(404).setBody("model not found"))
+        server.start()
+        val t = SubtitleTranslator(http, server.url("/v1").toString(), "", "m", jsonMode = false)
+        val out = t.translate(listOf("one", "two"), "ko")
+        assertEquals(listOf("one", "two"), out)
+        assertEquals(2, t.failedLines)
+        server.shutdown()
+    }
+
+    @Test fun rejectedKeyStopsTheJob() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(401))
+        server.start()
+        val t = SubtitleTranslator(http, server.url("/v1").toString(), "BAD", "m")
+        val e = runCatching { runBlocking { t.translate(listOf("one"), "ko") } }.exceptionOrNull()
+        assertTrue(e is com.lumen.player.subtitle.ai.ApiKeyRejectedException, "$e")
+        server.shutdown()
+    }
+
+    @Test fun parsesWaitHints() {
+        assertEquals(12_000L, com.lumen.player.subtitle.ai.parseWaitMs("12"))
+        assertEquals(7_660L, com.lumen.player.subtitle.ai.parseWaitMs("7.66s"))
+        assertEquals(179_560L, com.lumen.player.subtitle.ai.parseWaitMs("2m59.56s"))
+        assertEquals(3_723_000L, com.lumen.player.subtitle.ai.parseWaitMs("1h2m3s"))
+        assertEquals(null, com.lumen.player.subtitle.ai.parseWaitMs(""))
+    }
+}
