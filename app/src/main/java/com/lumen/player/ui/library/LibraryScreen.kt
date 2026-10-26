@@ -1,5 +1,11 @@
 package com.lumen.player.ui.library
 
+import android.app.Activity
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -22,6 +28,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -34,6 +41,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,6 +57,7 @@ import com.lumen.player.LumenApp
 import com.lumen.player.data.db.ServerEntity
 import com.lumen.player.data.db.ServerType
 import com.lumen.player.data.media.MediaEntry
+import com.lumen.player.data.media.MediaPermissions
 import com.lumen.player.player.formatDuration
 import com.lumen.player.ui.Routes
 import com.lumen.player.ui.components.ContinueCard
@@ -76,6 +85,13 @@ fun LibraryScreen(nav: NavController, vm: LibraryViewModel = viewModel()) {
     val scope = rememberCoroutineScope()
     var searchOpen by remember { mutableStateOf(false) }
     var addToPlaylist by remember { mutableStateOf<List<MediaEntry>?>(null) }
+
+    val activity = context as? Activity
+    var askedPermission by rememberSaveable { mutableStateOf(false) }
+    val requestMedia = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        askedPermission = true
+        vm.refresh()
+    }
 
     // 권한을 허용하고 돌아오거나 새 파일을 받은 뒤 목록을 새로 읽는다
     LifecycleResumeEffect(Unit) {
@@ -167,7 +183,24 @@ fun LibraryScreen(nav: NavController, vm: LibraryViewModel = viewModel()) {
 
         when {
             data.permissionMissing -> item {
-                EmptyState("기기의 미디어를 볼 수 없습니다", "설정 › 앱 › 루멘 › 권한에서 사진 및 동영상, 음악 접근을 허용하세요.")
+                // 거부를 거듭해 시스템 창이 더 뜨지 않으면 앱 설정의 권한 화면으로 보낸다
+                val blocked = askedPermission && activity != null &&
+                    MediaPermissions.media.none { activity.shouldShowRequestPermissionRationale(it) }
+                EmptyState(
+                    "기기의 미디어를 볼 수 없습니다",
+                    if (blocked) "설정 › 권한에서 사진 및 동영상, 음악 및 오디오 접근을 허용하세요."
+                    else "기기에 저장된 영상과 음악을 보려면 접근을 허용하세요.",
+                ) {
+                    Button(onClick = {
+                        if (blocked) {
+                            context.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
+                            )
+                        } else {
+                            requestMedia.launch(MediaPermissions.media)
+                        }
+                    }) { Text(if (blocked) "설정 열기" else "기기 미디어 접근 허용") }
+                }
             }
             tab == LibraryTab.VIDEO -> {
                 item { SectionTitle(if (query.isBlank()) "최근 추가된 영상" else "검색 결과 ${filteredVideos.size}개") }

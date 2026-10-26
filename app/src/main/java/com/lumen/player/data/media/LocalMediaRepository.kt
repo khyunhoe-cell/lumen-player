@@ -11,6 +11,8 @@ data class LocalFolder(val path: String, val name: String, val items: List<Media
 
 class LocalMediaRepository(private val context: Context) {
 
+    fun hasAccess(): Boolean = MediaPermissions.hasAny(context)
+
     suspend fun videos(): List<MediaEntry> = withContext(Dispatchers.IO) {
         val collection = if (Build.VERSION.SDK_INT >= 29) {
             MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
