@@ -23,6 +23,23 @@ import java.util.Locale
  * 인식한 대사를 OpenAI 호환 chat API로 번역한다. 줄 수를 그대로 지키게 하고,
  * 모델이 줄을 합치거나 쪼개서 개수가 어긋나면 묶음을 반으로 나눠 다시 보낸다.
  */
+/** 자막 번역 엔진 공통 인터페이스. 줄 수를 그대로 지켜 돌려준다. */
+interface TranslationEngine {
+    /** 번역하지 못해 원문으로 남긴 줄 수와 마지막 원인 */
+    val failedLines: Int
+    val lastError: String?
+
+    suspend fun translate(
+        lines: List<String>,
+        target: String,
+        source: String = "",
+        glossary: String = "",
+        context: List<String> = emptyList(),
+    ): List<String>
+
+    fun close() {}
+}
+
 class SubtitleTranslator(
     private val http: OkHttpClient,
     private val baseUrl: String,
@@ -30,14 +47,13 @@ class SubtitleTranslator(
     private val model: String,
     /** response_format=json_object를 보낼지. 일부 로컬 서버는 이 옵션을 거부한다 */
     private val jsonMode: Boolean = true,
-) {
+) : TranslationEngine {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
-    /** 번역하지 못해 원문으로 남긴 줄 수와 마지막 원인. 작업이 끝날 때 사용자에게 알린다 */
-    var failedLines = 0
+    override var failedLines = 0
         private set
-    var lastError: String? = null
+    override var lastError: String? = null
         private set
 
     /** 서버가 JSON 모드를 거절하면(400) 이후로는 끄고 보낸다 */
@@ -47,12 +63,12 @@ class SubtitleTranslator(
      * @param context 직전 대사(원문). 번역하지 않고 문맥으로만 쓴다
      * @return lines와 같은 개수의 번역문
      */
-    suspend fun translate(
+    override suspend fun translate(
         lines: List<String>,
         target: String,
-        source: String = "",
-        glossary: String = "",
-        context: List<String> = emptyList(),
+        source: String,
+        glossary: String,
+        context: List<String>,
     ): List<String> = lines.chunked(BATCH).flatMap { translateBatch(it, target, source, glossary, context) }
 
     private suspend fun translateBatch(

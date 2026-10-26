@@ -29,6 +29,9 @@ data class Segment(val startMs: Long, val endMs: Long, val text: String, val wor
 
 interface SttClient {
     suspend fun transcribe(chunk: File, previousText: String): List<Segment>
+
+    /** 기기 안 인식처럼 붙잡은 자원이 있으면 작업이 끝날 때 놓는다 */
+    fun close() {}
 }
 
 private val json = Json { ignoreUnknownKeys = true; isLenient = true }
