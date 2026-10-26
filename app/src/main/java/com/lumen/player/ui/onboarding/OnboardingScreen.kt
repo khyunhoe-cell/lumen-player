@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import com.lumen.player.data.media.MediaPermissions
 import com.lumen.player.ui.theme.Lumen
 
 private val sources = listOf("내 기기", "Google Drive", "OneDrive", "SMB", "FTP", "WebDAV", "NFS")
@@ -48,13 +49,8 @@ private val sources = listOf("내 기기", "Google Drive", "OneDrive", "SMB", "F
 @Composable
 fun OnboardingScreen(onGranted: () -> Unit, onAddServer: () -> Unit) {
     val permissions = buildList {
-        if (Build.VERSION.SDK_INT >= 33) {
-            add(Manifest.permission.READ_MEDIA_VIDEO)
-            add(Manifest.permission.READ_MEDIA_AUDIO)
-            add(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            add(Manifest.permission.READ_EXTERNAL_STORAGE)
-        }
+        addAll(MediaPermissions.media)
+        if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
     }.toTypedArray()
     // 거부해도 네트워크 재생은 되므로 결과와 무관하게 다음으로 간다
     val request = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { onGranted() }

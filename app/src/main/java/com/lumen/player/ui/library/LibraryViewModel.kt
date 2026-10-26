@@ -68,8 +68,8 @@ class LibraryViewModel : ViewModel() {
                     .map { (name, items) -> LocalFolder(name, name, items) }
                     .sortedBy { it.name.lowercase() },
                 loading = false,
-                permissionMissing = videos.exceptionOrNull() is SecurityException &&
-                    music.exceptionOrNull() is SecurityException,
+                permissionMissing = !container.localMedia.hasAccess() ||
+                    (videos.exceptionOrNull() is SecurityException && music.exceptionOrNull() is SecurityException),
             )
         }
     }

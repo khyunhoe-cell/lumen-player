@@ -25,6 +25,8 @@ add_subdirectory(${WHISPER_DIR} whisper EXCLUDE_FROM_ALL)
 
 add_library(lumen_whisper SHARED whisper_jni.cpp)
 target_link_libraries(lumen_whisper PRIVATE whisper log)
+# 16KB 페이지 기기(Android 15+)에서도 로드되도록 LOAD 세그먼트를 16KB로 정렬한다. NDK r28부터는 기본값이다
+target_link_options(lumen_whisper PRIVATE "-Wl,-z,max-page-size=16384")
 
 if (NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(lumen_whisper PRIVATE -O3)
