@@ -71,6 +71,15 @@ class TranslatorTest {
         server.shutdown()
     }
 
+    @Test fun contextKeepsLastFourPairsAndPromptMentionsSpeechRecognition() {
+        val ctx = SubtitleTranslator.contextLines(listOf("a", "b", "c", "d", "e"), listOf("A", "b", "C", "D", "E"))
+        assertEquals(listOf("b", "c → C", "d → D", "e → E"), ctx)
+        val prompt = SubtitleTranslator.systemPrompt("ko", "ja", "")
+        listOf("speech recognition", "misheard", "Korean script", "original → translation").forEach {
+            assertTrue(prompt.contains(it), "missing $it")
+        }
+    }
+
     @Test fun targetLanguageRules() {
         assertEquals("", AiSettings().target())
         assertEquals("ko", AiSettings(targetLanguage = "ko").target())
