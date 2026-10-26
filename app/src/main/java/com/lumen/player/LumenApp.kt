@@ -9,6 +9,7 @@ import com.lumen.player.remote.RemoteRegistry
 import com.lumen.player.subtitle.SubtitleRepository
 import com.lumen.player.subtitle.ai.AiSubtitleGenerator
 import com.lumen.player.subtitle.ai.ApiKeyChecker
+import com.lumen.player.subtitle.ai.WhisperModelManager
 import com.lumen.player.subtitle.online.OnlineSubtitleSearch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,8 +31,9 @@ class AppContainer(app: Application) {
     val remotes = RemoteRegistry(app, db.servers(), http)
     val subtitles = SubtitleRepository(app, remotes)
     val onlineSubtitles = OnlineSubtitleSearch(app, http, settings, remotes)
-    val aiSubtitles = AiSubtitleGenerator(app, http, settings, remotes, scope)
     val apiKeyChecker = ApiKeyChecker(http)
+    val whisperModels = WhisperModelManager(app, http, scope)
+    val aiSubtitles = AiSubtitleGenerator(app, http, settings, remotes, whisperModels, scope)
     val player = PlayerConnection(app, scope)
 }
 

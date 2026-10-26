@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -44,6 +46,8 @@ import com.lumen.player.data.settings.SubtitleFont
 import com.lumen.player.data.settings.SubtitlePosition
 import com.lumen.player.data.settings.SubtitleStyle
 import com.lumen.player.data.settings.TranslationProvider
+import com.lumen.player.data.settings.WhisperModel
+import com.lumen.player.subtitle.ai.ModelState
 import com.lumen.player.subtitle.ui.SubtitlePreview
 import com.lumen.player.ui.components.ColorSwatches
 import com.lumen.player.ui.components.LabeledSlider
@@ -190,14 +194,18 @@ fun AiSettingsScreen(nav: NavController) {
                     style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted,
                 )
             }
-            ApiKeyField(ai.provider)
+            if (ai.provider == SttProvider.ON_DEVICE) {
+                OnDeviceWhisperSection(ai)
+            } else {
+                ApiKeyField(ai.provider)
 
-            var model by remember(ai.provider, ai.models) { mutableStateOf(ai.model()) }
-            OutlinedTextField(model, { model = it }, singleLine = true, label = { Text("모델") }, modifier = Modifier.fillMaxWidth())
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                modelSuggestions(ai.provider).forEach { m -> LumenChip(m, model == m) { model = m } }
+                var model by remember(ai.provider, ai.models) { mutableStateOf(ai.model()) }
+                OutlinedTextField(model, { model = it }, singleLine = true, label = { Text("모델") }, modifier = Modifier.fillMaxWidth())
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    modelSuggestions(ai.provider).forEach { m -> LumenChip(m, model == m) { model = m } }
+                }
+                TextButton(onClick = { scope.launch { repo.updateAi { it.copy(models = it.models + (ai.provider to model.trim())) } } }) { Text("모델 저장") }
             }
-            TextButton(onClick = { scope.launch { repo.updateAi { it.copy(models = it.models + (ai.provider to model.trim())) } } }) { Text("모델 저장") }
 
             Label("인식 옵션")
             var language by remember(ai.language) { mutableStateOf(ai.language) }
@@ -330,6 +338,65 @@ private fun modelSuggestions(p: SttProvider) = when (p) {
     SttProvider.DEEPGRAM -> listOf("nova-3", "nova-2")
     SttProvider.ELEVENLABS -> listOf("scribe_v1")
     SttProvider.CUSTOM -> listOf("whisper-large-v3", "large-v3", "Systran/faster-whisper-large-v3")
+    SttProvider.ON_DEVICE -> WhisperModel.entries.map { it.id }
+}
+
+/** 기기 안 Whisper: 모델을 고르고 받고 지운다. 받는 중에는 진행률을 보여 준다 */
+@Composable
+private fun OnDeviceWhisperSection(ai: AiSettings) {
+    val container = LumenApp.container
+    val repo = container.settings
+    val scope = rememberCoroutineScope()
+    val states by container.whisperModels.states.collectAsState()
+    val selected = WhisperModel.byId(ai.model())
+    val unavailable = remember { com.lumen.player.subtitle.ai.WhisperNative.unavailableReason() }
+
+    if (unavailable != null) {
+        Text(unavailable, style = MaterialTheme.typography.bodySmall, color = Lumen.Error)
+        return
+    }
+    Text(
+        "모델을 한 번 받아 두면 인터넷 없이 인식합니다. 큰 모델일수록 정확하지만 느리고, 영상 길이보다 오래 걸릴 수 있습니다. 와이파이에서 받으세요.",
+        style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted,
+    )
+    WhisperModel.entries.forEach { m ->
+        val st = states[m] ?: ModelState(false)
+        Surface(
+            onClick = { scope.launch { repo.updateAi { it.copy(models = it.models + (SttProvider.ON_DEVICE to m.id)) } } },
+            color = if (selected == m) Lumen.PrimaryContainer else Lumen.Surface,
+            shape = RoundedCornerShape(16.dp),
+        ) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+                Text("${m.id} · 약 ${m.sizeMb}MB", style = MaterialTheme.typography.titleSmall)
+                Text(m.note, style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted)
+                when {
+                    st.progress != null -> {
+                        LinearProgressIndicator(
+                            progress = { st.progress },
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                            color = Lumen.Primary,
+                            trackColor = Lumen.Hairline,
+                        )
+                        Row {
+                            Text("받는 중 ${(st.progress * 100).toInt()}%", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f).padding(top = 12.dp))
+                            TextButton(onClick = { container.whisperModels.cancel(m) }) { Text("취소") }
+                        }
+                    }
+                    st.downloaded -> Row {
+                        Text("받아 둠", style = MaterialTheme.typography.bodySmall, color = Lumen.Primary, modifier = Modifier.weight(1f).padding(top = 12.dp))
+                        TextButton(onClick = { container.whisperModels.delete(m) }) { Text("지우기") }
+                    }
+                    else -> Row {
+                        Text(st.error ?: "아직 받지 않음", style = MaterialTheme.typography.bodySmall, color = if (st.error != null) Lumen.Error else Lumen.TextMuted, modifier = Modifier.weight(1f).padding(top = 12.dp))
+                        TextButton(onClick = { container.whisperModels.download(m) }) { Text("받기") }
+                    }
+                }
+            }
+        }
+    }
+    ToggleRow("정확도 우선", "빔 서치로 더 정확하게 인식합니다 · 2~3배 느려짐", ai.onDeviceAccurate) { v ->
+        scope.launch { repo.updateAi { it.copy(onDeviceAccurate = v) } }
+    }
 }
 
 @Composable

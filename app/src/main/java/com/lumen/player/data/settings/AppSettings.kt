@@ -44,12 +44,41 @@ data class SubtitleStyle(
 )
 
 @Serializable
-enum class SttProvider(val label: String, val free: Boolean, val defaultModel: String, val note: String) {
+enum class SttProvider(
+    val label: String,
+    val free: Boolean,
+    val defaultModel: String,
+    val note: String,
+    val needsKey: Boolean = true,
+) {
     GROQ("Groq", true, "whisper-large-v3", "무료 등급 제공 · Whisper large-v3 / turbo"),
     OPENAI("OpenAI", false, "whisper-1", "타임스탬프가 필요한 자막에는 whisper-1"),
     DEEPGRAM("Deepgram", false, "nova-3", "가입 크레딧 제공 · 빠른 처리"),
     ELEVENLABS("ElevenLabs", false, "scribe_v1", "단어 단위 타임스탬프 · 높은 정확도"),
-    CUSTOM("내 서버", true, "whisper-large-v3", "whisper.cpp, faster-whisper 등 OpenAI 호환 서버"),
+    CUSTOM("내 서버", true, "whisper-large-v3", "whisper.cpp, faster-whisper 등 OpenAI 호환 서버", needsKey = false),
+    ON_DEVICE(
+        "기기 안 Whisper", true, WhisperModel.TURBO_Q5.id,
+        "인터넷 없이 휴대폰에서 인식 · 모델을 한 번 받아 둠 · 클라우드보다 느림", needsKey = false,
+    ),
+}
+
+/**
+ * 기기 안 인식에 쓰는 whisper.cpp ggml 모델. 크기는 내려받을 파일 크기(대략).
+ * 속도는 Snapdragon 855급, 4스레드 기준 어림값이다.
+ */
+@Serializable
+enum class WhisperModel(val id: String, val fileName: String, val sizeMb: Int, val note: String) {
+    BASE("base", "ggml-base.bin", 148, "가장 빠름 · 한국어 정확도 낮음"),
+    SMALL_Q5("small-q5_1", "ggml-small-q5_1.bin", 190, "빠름 · 보통 정확도"),
+    MEDIUM_Q5("medium-q5_0", "ggml-medium-q5_0.bin", 539, "느림 · 높은 정확도"),
+    TURBO_Q5("large-v3-turbo-q5_0", "ggml-large-v3-turbo-q5_0.bin", 574, "권장 · 가장 정확함 · 영상 길이보다 오래 걸릴 수 있음"),
+    ;
+
+    val url get() = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$fileName"
+
+    companion object {
+        fun byId(id: String) = entries.firstOrNull { it.id == id } ?: TURBO_Q5
+    }
 }
 
 /**
@@ -93,6 +122,8 @@ data class AiSettings(
     /** 고유명사·용어를 적어 두면 인식 정확도가 오른다 */
     val vocabularyPrompt: String = "",
     val maxCharsPerLine: Int = 32,
+    /** 기기 안 인식에서 빔 서치(5)를 쓸지. 더 정확하지만 2~3배 느리다 */
+    val onDeviceAccurate: Boolean = false,
 ) {
     fun model(p: SttProvider = provider) = models[p]?.takeIf { it.isNotBlank() } ?: p.defaultModel
 

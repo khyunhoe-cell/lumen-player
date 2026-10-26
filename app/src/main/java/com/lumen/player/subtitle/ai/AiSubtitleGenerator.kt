@@ -6,6 +6,7 @@ import com.lumen.player.data.settings.AiSettings
 import com.lumen.player.data.settings.SettingsRepository
 import com.lumen.player.data.settings.SttProvider
 import com.lumen.player.data.settings.TranslationProvider
+import com.lumen.player.data.settings.WhisperModel
 import com.lumen.player.remote.RemoteRegistry
 import com.lumen.player.subtitle.LoadedSubtitle
 import com.lumen.player.subtitle.SubtitleCue
@@ -47,6 +48,7 @@ class AiSubtitleGenerator(
     private val http: OkHttpClient,
     private val settings: SettingsRepository,
     private val remotes: RemoteRegistry,
+    private val whisperModels: WhisperModelManager,
     private val scope: CoroutineScope,
 ) {
     private val _job = MutableStateFlow<AiJob?>(null)
@@ -65,13 +67,14 @@ class AiSubtitleGenerator(
             var extractor: Job? = null
             var ticker: Job? = null
             var translatorRef: TranslationEngine? = null
+            var clientRef: SttClient? = null
             // 끝난 뒤에는 진행률 갱신이 완료·실패 상태를 덮어쓰지 않게 한다
             val finished = java.util.concurrent.atomic.AtomicBoolean(false)
             try {
                 _job.value = AiJob(entry.uri, entry.title, AiJob.Stage.PREPARING, 0f, "준비 중")
                 val ai = settings.current().ai
                 val key = settings.apiKey(ai)
-                if (ai.provider != SttProvider.CUSTOM && key.isBlank()) {
+                if (ai.provider.needsKey && key.isBlank()) {
                     throw IllegalStateException("설정 › AI 자막에서 ${ai.provider.label} API 키를 넣어 주세요")
                 }
                 val client: SttClient = when (ai.provider) {
@@ -80,7 +83,16 @@ class AiSubtitleGenerator(
                     SttProvider.CUSTOM -> OpenAiCompatibleClient(http, ai.customEndpoint, key, ai)
                     SttProvider.DEEPGRAM -> DeepgramClient(http, key, ai)
                     SttProvider.ELEVENLABS -> ElevenLabsClient(http, key, ai)
+                    SttProvider.ON_DEVICE -> {
+                        WhisperNative.unavailableReason()?.let { throw IllegalStateException(it) }
+                        val model = WhisperModel.byId(ai.model())
+                        if (!whisperModels.isDownloaded(model)) {
+                            throw IllegalStateException("설정 › AI 자막에서 기기 안 Whisper 모델(${model.id}, 약 ${model.sizeMb}MB)을 먼저 받아 주세요")
+                        }
+                        OnDeviceWhisperClient(whisperModels.file(model), ai)
+                    }
                 }
+                clientRef = client
                 val target = ai.target()
                 var statusHook: (String) -> Unit = {}
                 val translator = if (target.isBlank()) null else translatorFor(ai) { statusHook(it) }
@@ -146,7 +158,11 @@ class AiSubtitleGenerator(
                 report("오디오를 추출하는 중")
                 for (chunk in chunks) {
                     report("음성을 인식하는 중 · ${formatTime(chunk.startMs)}부터")
-                    val segments = withContext(Dispatchers.IO + rateLimit) { client.transcribe(chunk.file, previousText) }
+                    val chunkProgress = SttProgressListener { pct ->
+                        transcribedMs = chunk.startMs + chunk.durationMs * pct / 100
+                        stageText = "음성을 인식하는 중 · ${formatTime(chunk.startMs)}부터 · 이 조각 $pct%"
+                    }
+                    val segments = withContext(Dispatchers.IO + rateLimit + chunkProgress) { client.transcribe(chunk.file, previousText) }
                     chunk.file.delete()
                     val shifted = segments.map { s ->
                         s.copy(
@@ -196,6 +212,7 @@ class AiSubtitleGenerator(
                 _job.value = AiJob(entry.uri, entry.title, AiJob.Stage.FAILED, 0f, e.message ?: e.javaClass.simpleName)
             } finally {
                 translatorRef?.close()
+                clientRef?.close()
                 ticker?.cancel()
                 extractor?.cancel()
                 workDir.deleteRecursively()
@@ -221,7 +238,7 @@ class AiSubtitleGenerator(
 
     /** 생성에 필요한데 비어 있는 키의 공급자. 없으면 null */
     fun missingKey(ai: AiSettings): SttProvider? {
-        if (ai.provider != SttProvider.CUSTOM && settings.apiKey(ai).isBlank()) return ai.provider
+        if (ai.provider.needsKey && settings.apiKey(ai).isBlank()) return ai.provider
         val keyOf = ai.translator.keyOf
         if (ai.target().isNotBlank() && ai.translator.needsKey && settings.apiKey(ai, keyOf).isBlank()) return keyOf
         return null
