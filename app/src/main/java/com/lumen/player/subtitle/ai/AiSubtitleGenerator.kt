@@ -206,11 +206,13 @@ class AiSubtitleGenerator(
                 val file = subtitles.saveSrt(entry.uri, "${entry.title.substringBeforeLast('.')}.ai.$lang", cues)
                 val result = LoadedSubtitle(label, file.absolutePath, cues.toList())
                 val failed = translator?.failedLines ?: 0
-                val doneMsg = if (failed > 0) {
-                    "자막 ${cues.size}줄을 만들었습니다. ${failed}줄은 번역하지 못해 원문으로 남겼습니다 (${translator?.lastError})"
-                } else {
-                    "자막 ${cues.size}줄을 만들었습니다"
-                }
+                val doneMsg = (
+                    if (failed > 0) {
+                        "자막 ${cues.size}줄을 만들었습니다. ${failed}줄은 번역하지 못해 원문으로 남겼습니다 (${translator?.lastError})"
+                    } else {
+                        "자막 ${cues.size}줄을 만들었습니다"
+                    }
+                    ) + (translator?.notice?.let { ". $it" } ?: "")
                 _job.value = AiJob(entry.uri, entry.title, AiJob.Stage.DONE, 1f, doneMsg, cues.size)
                 onDone(result)
             } catch (e: CancellationException) {

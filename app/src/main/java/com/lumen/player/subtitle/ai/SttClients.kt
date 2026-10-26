@@ -43,6 +43,9 @@ class ApiKeyRejectedException(message: String) : IOException(message)
 /** 사용 한도 때문에 오래 기다려야 하는 경우 */
 class RateLimitException(message: String) : IOException(message)
 
+/** 공급자가 모델을 없앴거나 이 키로 쓸 수 없는 경우(404 model_not_found). 같은 모델로 다시 보내도 소용없다 */
+class ModelNotFoundException(message: String) : IOException(message)
+
 /** 한도에 걸려 기다릴 때 화면에 알리고 싶으면 코루틴 컨텍스트에 넣는다 */
 class RateLimitListener(val onWait: (waitMs: Long, what: String) -> Unit) :
     AbstractCoroutineContextElement(RateLimitListener) {
@@ -89,6 +92,8 @@ internal suspend fun OkHttpClient.executeWithRetry(what: String = "음성 인식
             resp.code == 429 -> throw RateLimitException("$what 사용 한도에 걸렸습니다. 잠시 뒤 다시 시도하세요")
             resp.code == 401 || resp.code == 403 -> throw ApiKeyRejectedException("$what: API 키가 올바르지 않습니다 (${resp.code})")
             resp.code == 413 -> throw IOException("오디오 조각이 공급자의 크기 제한을 넘었습니다")
+            resp.code == 404 && ("model_not_found" in body || "does not exist" in body) ->
+                throw ModelNotFoundException("$what 모델을 쓸 수 없습니다 (404): ${body.take(200)}")
             else -> throw IOException("$what 요청 실패 (${resp.code}): ${body.take(300)}")
         }
     }

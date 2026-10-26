@@ -411,7 +411,7 @@ private fun OnDeviceTranslationPrefetch(source: String, target: String) {
 }
 
 private fun translationModelSuggestions(p: TranslationProvider) = when (p) {
-    TranslationProvider.GROQ -> listOf("llama-3.3-70b-versatile", "openai/gpt-oss-120b")
+    TranslationProvider.GROQ -> listOf("openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b")
     TranslationProvider.OPENAI -> listOf("gpt-4.1-mini", "gpt-4.1")
     TranslationProvider.CUSTOM -> listOf("qwen2.5:7b", "gemma3:12b")
     TranslationProvider.ON_DEVICE -> emptyList()

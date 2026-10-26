@@ -71,6 +71,38 @@ class TranslatorTest {
         server.shutdown()
     }
 
+    @Test fun switchesToAvailableModelWhenModelWasRemoved() = runBlocking {
+        val server = MockWebServer()
+        val gone = """{"error":{"message":"The model `llama-3.3-70b-versatile` does not exist or you do not have access to it.","type":"invalid_request_error","code":"model_not_found"}}"""
+        server.enqueue(MockResponse().setResponseCode(404).setBody(gone))
+        server.enqueue(MockResponse().setBody("""{"data":[{"id":"whisper-large-v3"},{"id":"openai/gpt-oss-20b"},{"id":"openai/gpt-oss-120b"}]}"""))
+        server.enqueue(chat("""{"lines": ["하나", "둘"]}"""))
+        server.enqueue(chat("""{"lines": ["셋"]}"""))
+        server.start()
+        val t = SubtitleTranslator(http, server.url("/v1").toString(), "KEY", "llama-3.3-70b-versatile")
+        assertEquals(listOf("하나", "둘"), t.translate(listOf("one", "two"), "ko"))
+        assertEquals(listOf("셋"), t.translate(listOf("three"), "ko"))
+        assertEquals(0, t.failedLines)
+        assertTrue(t.notice!!.contains("openai/gpt-oss-120b"))
+        server.takeRequest()
+        assertEquals("/v1/models", server.takeRequest().path)
+        assertTrue(server.takeRequest().body.readUtf8().contains("\"openai/gpt-oss-120b\""))
+        assertEquals(4, server.requestCount)
+        server.shutdown()
+    }
+
+    @Test fun stopsWithClearMessageWhenNoReplacementModel() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":{"code":"model_not_found"}}"""))
+        server.enqueue(MockResponse().setBody("""{"data":[{"id":"whisper-large-v3"}]}"""))
+        server.start()
+        val t = SubtitleTranslator(http, server.url("/v1").toString(), "KEY", "gone-model")
+        val e = kotlin.runCatching { t.translate(listOf("one", "two", "three"), "ko") }.exceptionOrNull()
+        assertTrue(e is com.lumen.player.subtitle.ai.ModelNotFoundException && e.message!!.contains("gone-model"))
+        assertEquals(2, server.requestCount)
+        server.shutdown()
+    }
+
     @Test fun contextKeepsLastFourPairsAndPromptMentionsSpeechRecognition() {
         val ctx = SubtitleTranslator.contextLines(listOf("a", "b", "c", "d", "e"), listOf("A", "b", "C", "D", "E"))
         assertEquals(listOf("b", "c → C", "d → D", "e → E"), ctx)

@@ -97,7 +97,8 @@ enum class TranslationProvider(
     val note: String,
     val needsKey: Boolean = true,
 ) {
-    GROQ("Groq", "llama-3.3-70b-versatile", SttProvider.GROQ, "무료 등급 제공"),
+    // llama-3.3-70b-versatile은 2026-08-16에 무료·개발자 등급에서 종료됐다
+    GROQ("Groq", "openai/gpt-oss-120b", SttProvider.GROQ, "무료 등급 제공"),
     OPENAI("OpenAI", "gpt-4.1-mini", SttProvider.OPENAI, "유료 · 번역 품질이 안정적"),
     CUSTOM("내 서버", "qwen2.5:7b", SttProvider.CUSTOM, "Ollama, LM Studio 등 OpenAI 호환 서버", needsKey = false),
     ON_DEVICE(
