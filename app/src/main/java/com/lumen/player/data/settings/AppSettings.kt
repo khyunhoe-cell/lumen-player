@@ -60,6 +60,10 @@ enum class SttProvider(
         "기기 안 Whisper", true, WhisperModel.TURBO_Q5.id,
         "인터넷 없이 휴대폰에서 인식 · 모델을 한 번 받아 둠 · 클라우드보다 느림", needsKey = false,
     ),
+    SENSE_VOICE(
+        "기기 안 SenseVoice", true, "sense-voice-int8",
+        "인터넷 없이 휴대폰에서 빠르게 인식 · 한국어·영어·일본어·중국어·광둥어만 · 모델 약 240MB", needsKey = false,
+    ),
 }
 
 /**

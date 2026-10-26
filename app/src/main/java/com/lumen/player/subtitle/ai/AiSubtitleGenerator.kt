@@ -49,6 +49,7 @@ class AiSubtitleGenerator(
     private val settings: SettingsRepository,
     private val remotes: RemoteRegistry,
     private val whisperModels: WhisperModelManager,
+    private val senseVoiceModels: SenseVoiceModelManager,
     private val scope: CoroutineScope,
 ) {
     private val _job = MutableStateFlow<AiJob?>(null)
@@ -90,6 +91,15 @@ class AiSubtitleGenerator(
                             throw IllegalStateException("설정 › AI 자막에서 기기 안 Whisper 모델(${model.id}, 약 ${model.sizeMb}MB)을 먼저 받아 주세요")
                         }
                         OnDeviceWhisperClient(whisperModels.file(model), ai)
+                    }
+                    SttProvider.SENSE_VOICE -> {
+                        val lang = SenseVoice.modelLanguage(ai.language) ?: throw IllegalStateException(
+                            "SenseVoice는 한국어·영어·일본어·중국어·광둥어만 인식합니다. 설정 › AI 자막에서 인식 언어를 바꾸거나 다른 엔진을 골라 주세요",
+                        )
+                        if (!senseVoiceModels.isDownloaded()) {
+                            throw IllegalStateException("설정 › AI 자막에서 SenseVoice 모델(약 ${SenseVoice.totalSize / 1_000_000}MB)을 먼저 받아 주세요")
+                        }
+                        SenseVoiceClient(senseVoiceModels.dir, lang)
                     }
                 }
                 clientRef = client

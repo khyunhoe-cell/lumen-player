@@ -197,6 +197,8 @@ fun AiSettingsScreen(nav: NavController) {
             }
             if (ai.provider == SttProvider.ON_DEVICE) {
                 OnDeviceWhisperSection(ai)
+            } else if (ai.provider == SttProvider.SENSE_VOICE) {
+                SenseVoiceSection(ai)
             } else {
                 ApiKeyField(ai.provider)
 
@@ -422,6 +424,54 @@ private fun modelSuggestions(p: SttProvider) = when (p) {
     SttProvider.ELEVENLABS -> listOf("scribe_v1")
     SttProvider.CUSTOM -> listOf("whisper-large-v3", "large-v3", "Systran/faster-whisper-large-v3")
     SttProvider.ON_DEVICE -> WhisperModel.entries.map { it.id }
+    SttProvider.SENSE_VOICE -> emptyList()
+}
+
+/** 기기 안 SenseVoice: 모델 하나를 받고 지운다. 받는 중에는 진행률을 보여 준다 */
+@Composable
+private fun SenseVoiceSection(ai: AiSettings) {
+    val models = LumenApp.container.senseVoiceModels
+    val st by models.state.collectAsState()
+    val mb = com.lumen.player.subtitle.ai.SenseVoice.totalSize / 1_000_000
+    Text(
+        "모델(약 ${mb}MB)을 한 번 받아 두면 인터넷 없이 인식합니다. 말소리 구간만 골라 인식해 기기 안 Whisper보다 훨씬 빠릅니다. " +
+            "한국어·영어·일본어·중국어·광둥어만 인식하며, 인식 언어를 비워 두면 언어를 자동으로 알아냅니다. 와이파이에서 받으세요.",
+        style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted,
+    )
+    if (com.lumen.player.subtitle.ai.SenseVoice.modelLanguage(ai.language) == null) {
+        Text(
+            "지금 인식 언어(${languageLabel(ai.language)})는 SenseVoice가 인식하지 못합니다. 아래 인식 옵션에서 언어를 바꿔 주세요.",
+            style = MaterialTheme.typography.bodySmall, color = Lumen.Error,
+        )
+    }
+    Surface(color = Lumen.Surface, shape = RoundedCornerShape(16.dp)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Text("SenseVoice int8 + Silero VAD · 약 ${mb}MB", style = MaterialTheme.typography.titleSmall)
+            val progress = st.progress
+            when {
+                progress != null -> {
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        color = Lumen.Primary,
+                        trackColor = Lumen.Hairline,
+                    )
+                    Row {
+                        Text("받는 중 ${(progress * 100).toInt()}%", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f).padding(top = 12.dp))
+                        TextButton(onClick = { models.cancel() }) { Text("취소") }
+                    }
+                }
+                st.downloaded -> Row {
+                    Text("받아 둠", style = MaterialTheme.typography.bodySmall, color = Lumen.Primary, modifier = Modifier.weight(1f).padding(top = 12.dp))
+                    TextButton(onClick = { models.delete() }) { Text("지우기") }
+                }
+                else -> Row {
+                    Text(st.error ?: "아직 받지 않음", style = MaterialTheme.typography.bodySmall, color = if (st.error != null) Lumen.Error else Lumen.TextMuted, modifier = Modifier.weight(1f).padding(top = 12.dp))
+                    TextButton(onClick = { models.download() }) { Text("받기") }
+                }
+            }
+        }
+    }
 }
 
 /** 기기 안 Whisper: 모델을 고르고 받고 지운다. 받는 중에는 진행률을 보여 준다 */

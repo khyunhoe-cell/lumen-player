@@ -1,9 +1,43 @@
+import java.net.URI
+import java.security.MessageDigest
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+}
+
+// sherpa-onnx(기기 안 SenseVoice 인식)는 Maven에 없고 공식 GitHub 릴리스로 AAR(약 50MB)만 배포된다.
+// 저장소에 넣지 않고, 없으면 처음 빌드할 때 받아 SHA-256을 확인한다.
+val sherpaVersion = "1.13.8"
+val sherpaSha256 = "633c24321e06b1fe79feafa03ea16cbc0f8a286641e2da3559bac91bdb13bd96"
+val sherpaAar = file("libs/sherpa-onnx-$sherpaVersion.aar")
+
+fun sha256(f: File): String {
+    val md = MessageDigest.getInstance("SHA-256")
+    f.inputStream().use { input ->
+        val buf = ByteArray(1 shl 16)
+        while (true) {
+            val n = input.read(buf)
+            if (n < 0) break
+            md.update(buf, 0, n)
+        }
+    }
+    return md.digest().joinToString("") { "%02x".format(it) }
+}
+
+if (!sherpaAar.exists()) {
+    val url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaVersion/sherpa-onnx-$sherpaVersion.aar"
+    logger.lifecycle("sherpa-onnx AAR 받는 중: $url")
+    sherpaAar.parentFile.mkdirs()
+    val tmp = File(sherpaAar.path + ".part")
+    URI(url).toURL().openStream().use { input -> tmp.outputStream().use { input.copyTo(it) } }
+    tmp.renameTo(sherpaAar)
+}
+check(sha256(sherpaAar) == sherpaSha256) {
+    "sherpa-onnx AAR 체크섬이 맞지 않습니다. ${sherpaAar.path} 를 지우고 다시 빌드하세요."
 }
 
 android {
@@ -69,6 +103,10 @@ android {
                 "META-INF/BCKEY.SF",
             )
         }
+        jniLibs {
+            // sherpa-onnx의 C/C++ API 라이브러리는 JNI(Kotlin API)가 쓰지 않는다
+            excludes += setOf("**/libsherpa-onnx-c-api.so", "**/libsherpa-onnx-cxx-api.so")
+        }
     }
 }
 
@@ -119,6 +157,8 @@ dependencies {
     implementation(libs.mlkit.translate)
     implementation(libs.mlkit.language.id)
     implementation(libs.coroutines.play.services)
+    // 기기 안 SenseVoice 인식(Silero VAD + SenseVoice, onnxruntime)
+    implementation(files(sherpaAar))
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test.junit)
