@@ -29,6 +29,9 @@ interface TranslationEngine {
     val failedLines: Int
     val lastError: String?
 
+    /** 작업 중 사용자에게 알릴 일(예: 쓸 수 없는 모델을 다른 모델로 바꿈). 없으면 null */
+    val notice: String? get() = null
+
     suspend fun translate(
         lines: List<String>,
         target: String,
@@ -56,8 +59,15 @@ class SubtitleTranslator(
     override var lastError: String? = null
         private set
 
+    override var notice: String? = null
+        private set
+
     /** 서버가 JSON 모드를 거절하면(400) 이후로는 끄고 보낸다 */
     private var useJsonMode = jsonMode
+
+    /** 설정한 모델이 없어지면 서버가 가진 모델 중 하나로 바꿔 쓴다 */
+    private var currentModel = model
+    private var triedReplacement = false
 
     /**
      * @param context 직전 대사("원문 → 번역"). 번역하지 않고 문맥으로만 쓴다
@@ -78,6 +88,20 @@ class SubtitleTranslator(
             request(lines, target, source, glossary, context)
         } catch (e: ApiKeyRejectedException) {
             throw e
+        } catch (e: ModelNotFoundException) {
+            // 모델이 없어졌으면 줄마다 실패하지 말고 한 번만 대체 모델을 찾는다. 없으면 작업을 멈춘다
+            val replacement = if (triedReplacement) null else {
+                triedReplacement = true
+                runCatching { pickReplacement(listModels(), currentModel) }.getOrNull()
+            }
+            if (replacement == null) {
+                throw ModelNotFoundException(
+                    "번역 모델 '$currentModel'을(를) 쓸 수 없습니다. 설정 › AI 자막 › 자막 번역에서 다른 모델을 고르세요",
+                )
+            }
+            notice = "번역 모델 '$currentModel'을(를) 쓸 수 없어 '$replacement'(으)로 번역했습니다. 설정에서 모델을 바꿔 두세요"
+            currentModel = replacement
+            return translateBatch(lines, target, source, glossary, context)
         } catch (e: java.io.IOException) {
             // 모델이 JSON을 제대로 못 만들면 Groq·OpenAI는 400으로 거절한다. JSON 모드를 끄고 한 번 더 보낸다
             if (useJsonMode && e.message?.contains("(400)") == true) {
@@ -108,7 +132,7 @@ class SubtitleTranslator(
         lines: List<String>, target: String, source: String, glossary: String, context: List<String>,
     ): List<String>? {
         val body = buildJsonObject {
-            put("model", model)
+            put("model", currentModel)
             put("temperature", 0.2)
             if (useJsonMode) putJsonObject("response_format") { put("type", "json_object") }
             putJsonArray("messages") {
@@ -138,8 +162,33 @@ class SubtitleTranslator(
         return parseLines(content)
     }
 
+    /** OpenAI 호환 GET /models의 모델 ID 목록 */
+    private suspend fun listModels(): List<String> {
+        val text = http.executeWithRetry("모델 목록") {
+            Request.Builder().url(baseUrl.trimEnd('/') + "/models")
+                .apply { if (apiKey.isNotBlank()) header("Authorization", "Bearer $apiKey") }
+                .build()
+        }
+        return json.parseToJsonElement(text).jsonObject["data"]!!.jsonArray
+            .mapNotNull { it.jsonObject["id"]?.jsonPrimitive?.contentOrNull }
+    }
+
     companion object {
         private const val BATCH = 40
+
+        /** 번역에 쓸 만한 순서. 앞에 있을수록 먼저 고른다 */
+        private val preferredModels = listOf(
+            "openai/gpt-oss-120b", "gpt-4.1-mini", "gpt-4o-mini", "openai/gpt-oss-20b", "gpt-4.1", "gpt-4o",
+        )
+
+        /** 음성·임베딩·안전 검사처럼 글 번역에 쓸 수 없는 모델 */
+        private val nonChat = Regex("whisper|tts|orpheus|guard|embed|moderation|transcribe|audio|realtime|image|dall-e|distil", RegexOption.IGNORE_CASE)
+
+        /** 서버가 가진 모델 중 번역에 쓸 대체 모델. 쓸 만한 게 없으면 null */
+        internal fun pickReplacement(available: List<String>, failed: String): String? {
+            val candidates = available.filter { it != failed && !nonChat.containsMatchIn(it) }
+            return preferredModels.firstOrNull { it in candidates } ?: candidates.firstOrNull()
+        }
 
         fun languageName(code: String): String =
             Locale.forLanguageTag(code).getDisplayLanguage(Locale.ENGLISH).ifBlank { code }
