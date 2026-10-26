@@ -258,30 +258,99 @@ class AudioExtractor(private val context: Context, private val remotes: RemoteRe
     }
 }
 
-/** MediaExtractor가 SMB/FTP/WebDAV/NFS 파일을 임의 위치로 읽을 수 있게 한다. */
-private class RemoteMediaDataSource(private val fs: RemoteFileSystem, private val path: String) : MediaDataSource() {
-    private val total = fs.size(path)
+/**
+ * MediaExtractor가 SMB/FTP/WebDAV/NFS 파일을 임의 위치로 읽을 수 있게 한다.
+ *
+ * 오디오 트랙만 뽑을 때 MediaExtractor는 사이사이의 영상 데이터를 건너뛰며 몇 KB씩 위치를 옮겨 읽는다.
+ * 위치가 바뀔 때마다 새로 연결하면 인터넷 너머 NAS에서는 요청마다 수백 ms가 걸려 추출이 거의 멈추므로,
+ * 1MB 블록 단위로 이어서 받아 메모리에 두고 작은 읽기는 블록에서 꺼내 준다.
+ */
+private class RemoteMediaDataSource(fs: RemoteFileSystem, path: String) : MediaDataSource() {
+    private val reader = BlockReader(fs.size(path)) { position -> fs.open(path, position) }
+
+    override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int =
+        reader.readAt(position, buffer, offset, size)
+
+    override fun getSize(): Long = reader.total
+
+    override fun close() = reader.close()
+}
+
+/** 원격 파일을 블록 단위로 이어 받아 두고 임의 위치 읽기에 답한다. 안드로이드에 의존하지 않는다. */
+internal class BlockReader(
+    val total: Long,
+    private val blockSize: Int = BLOCK_SIZE,
+    private val open: (Long) -> InputStream,
+) {
     private var stream: InputStream? = null
+    /** 열린 스트림이 다음에 돌려줄 바이트의 위치 */
     private var streamPos = -1L
+    private val blocks = object : LinkedHashMap<Long, ByteArray>(MAX_BLOCKS, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, ByteArray>) = size > MAX_BLOCKS
+    }
+
+    /** 새로 연결한 횟수(테스트용) */
+    var opens = 0
+        private set
 
     @Synchronized
-    override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
-        if (total in 0..position) return -1
-        if (stream == null || streamPos != position) {
-            stream?.close()
-            stream = fs.open(path, position)
-            streamPos = position
-        }
-        val n = stream!!.read(buffer, offset, size)
-        if (n > 0) streamPos += n
+    fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
+        if (position < 0 || total in 0..position) return -1
+        if (size == 0) return 0
+        val index = position / blockSize
+        val block = blocks[index] ?: loadBlock(index).also { blocks[index] = it }
+        val inBlock = (position - index * blockSize).toInt()
+        if (inBlock >= block.size) return -1
+        val n = minOf(size, block.size - inBlock)
+        System.arraycopy(block, inBlock, buffer, offset, n)
         return n
     }
 
-    override fun getSize(): Long = total
+    private fun loadBlock(index: Long): ByteArray {
+        val start = index * blockSize
+        val gap = start - streamPos
+        // 조금 앞으로 건너뛰는 정도면 열린 스트림을 읽어 버리는 편이 새 연결보다 빠르다
+        if (stream == null || gap < 0 || gap > MAX_SKIP) {
+            stream?.close()
+            stream = open(start)
+            streamPos = start
+            opens++
+        } else {
+            discard(stream!!, gap)
+            streamPos = start
+        }
+        val want = if (total >= 0) minOf(blockSize.toLong(), total - start).toInt() else blockSize
+        val out = ByteArray(want)
+        var filled = 0
+        while (filled < want) {
+            val n = stream!!.read(out, filled, want - filled)
+            if (n < 0) break
+            filled += n
+        }
+        streamPos += filled
+        return if (filled == want) out else out.copyOf(filled)
+    }
+
+    private fun discard(input: InputStream, count: Long) {
+        val scratch = ByteArray(64 * 1024)
+        var left = count
+        while (left > 0) {
+            val n = input.read(scratch, 0, minOf(left, scratch.size.toLong()).toInt())
+            if (n < 0) break
+            left -= n
+        }
+    }
 
     @Synchronized
-    override fun close() {
+    fun close() {
         stream?.close()
         stream = null
+        blocks.clear()
+    }
+
+    companion object {
+        private const val BLOCK_SIZE = 1 shl 20
+        private const val MAX_BLOCKS = 16
+        private const val MAX_SKIP = 4L shl 20
     }
 }

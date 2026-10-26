@@ -186,11 +186,11 @@ class AiSubtitleGenerator(
                         val translated = withContext(Dispatchers.IO + rateLimit) {
                             translator.translate(shifted.map { it.text }, target, ai.language, ai.vocabularyPrompt, previousLines)
                         }
+                        previousLines = SubtitleTranslator.contextLines(shifted.map { it.text }, translated)
                         // 단어 시간은 원문 기준이라 버리고, 구간 시간 안에서 글자 수 비율로 나눈다
                         shifted.zip(translated) { s, t -> s.copy(text = t, words = emptyList()) }
                     }
                     cues += SegmentFormatter.toCues(forCues, ai.maxCharsPerLine)
-                    previousLines = shifted.takeLast(3).map { it.text }
                     previousText = segments.lastOrNull()?.text.orEmpty()
                     transcribedMs = chunk.startMs + chunk.durationMs
                     if (entry.durationMs <= 0) extractProgress = 1f

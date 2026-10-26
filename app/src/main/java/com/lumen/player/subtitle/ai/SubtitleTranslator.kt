@@ -60,7 +60,7 @@ class SubtitleTranslator(
     private var useJsonMode = jsonMode
 
     /**
-     * @param context 직전 대사(원문). 번역하지 않고 문맥으로만 쓴다
+     * @param context 직전 대사("원문 → 번역"). 번역하지 않고 문맥으로만 쓴다
      * @return lines와 같은 개수의 번역문
      */
     override suspend fun translate(
@@ -145,15 +145,28 @@ class SubtitleTranslator(
             Locale.forLanguageTag(code).getDisplayLanguage(Locale.ENGLISH).ifBlank { code }
 
         internal fun systemPrompt(target: String, source: String, glossary: String) = buildString {
+            val name = languageName(target)
             append("You translate video subtitles")
             if (source.isNotBlank()) append(" from ").append(languageName(source))
-            append(" into ").append(languageName(target)).append(" (").append(target).append(").\n")
-            append("The user sends a JSON object with \"lines\" (and optionally \"context\", earlier lines for reference only). ")
+            append(" into ").append(name).append(" (").append(target).append(").\n")
+            // 실시간 자막 번역 앱에서 쓰던 지시: 음성 인식 결과라 오인식이 있을 수 있음을 알리고 말투를 살리게 한다
+            append("The lines come from automatic speech recognition of the video's audio, so they may contain misheard words, ")
+            append("missing punctuation, or a sentence cut off mid-way. Use the surrounding lines and common sense to infer what was actually said, ")
+            append("and translate that meaning. Write the way professional ").append(name).append(" subtitles read: natural, concise, ")
+            append("and matching the speaker's tone (casual speech stays casual, polite speech stays polite). ")
+            append("Write people's names in ").append(name).append(" script.\n")
+            append("The user sends a JSON object with \"lines\" (and optionally \"context\", earlier lines as \"original → translation\" for reference only). ")
             append("Reply with ONLY a JSON object {\"lines\": [...]} containing exactly one translation per input line, in the same order. ")
-            append("Never merge, split, skip or explain lines. Keep each line short and natural for on-screen subtitles, ")
-            append("keep names and terms consistent, and leave a line unchanged if it is already in the target language.")
+            append("Never merge, split, skip or explain lines; a line may continue the previous one, so translate only its own part. ")
+            append("Keep names and terms consistent with the context, and leave a line unchanged if it is already in the target language.")
             if (glossary.isNotBlank()) append("\nGlossary (proper nouns and terms to keep consistent): ").append(glossary.trim())
         }
+
+        /** 다음 조각 번역에 문맥으로 넘길 앞 대사. 번역문도 함께 보여 줘야 이름·말투가 이어진다 */
+        fun contextLines(originals: List<String>, translations: List<String>): List<String> =
+            originals.zip(translations).takeLast(CONTEXT_LINES).map { (o, t) -> if (o == t) o else "$o → $t" }
+
+        private const val CONTEXT_LINES = 4
 
         /** 코드 블록이나 앞뒤 설명이 붙어 와도 {"lines": [...]} 부분만 읽는다 */
         internal fun parseLines(content: String): List<String>? {
