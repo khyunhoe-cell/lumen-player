@@ -273,8 +273,14 @@ private fun TranslationSection(ai: AiSettings) {
         )
         TextButton(onClick = { scope.launch { repo.updateAi { it.copy(translationEndpoint = endpoint.trim()) } } }) { Text("주소 저장") }
     }
+    if (ai.translator == TranslationProvider.ON_DEVICE) {
+        OnDeviceTranslationPrefetch(source = ai.language, target = target)
+        return
+    }
     val keyOwner = ai.translator.keyOf
-    if (keyOwner == ai.provider) {
+    if (!ai.translator.needsKey) {
+        // 내 서버는 키 없이도 쓸 수 있다
+    } else if (keyOwner == ai.provider) {
         Text("음성 인식에 넣은 ${keyOwner.label} 키를 함께 씁니다.", style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted)
     } else {
         ApiKeyField(keyOwner)
@@ -289,10 +295,33 @@ private fun TranslationSection(ai: AiSettings) {
     }) { Text("모델 저장") }
 }
 
+/** 인터넷이 없을 때도 쓰도록 번역 모델을 미리 받는다 */
+@Composable
+private fun OnDeviceTranslationPrefetch(source: String, target: String) {
+    val scope = rememberCoroutineScope()
+    var status by remember(source, target) { mutableStateOf<String?>(null) }
+    if (source.isBlank()) {
+        Text(
+            "인식 언어를 자동 감지로 두면 첫 대사로 언어를 알아낸 뒤 모델을 받습니다. 인식 언어를 정하면 여기서 미리 받아 둘 수 있습니다.",
+            style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted,
+        )
+        return
+    }
+    TextButton(onClick = {
+        status = "${Locale(source).displayLanguage} → ${Locale(target).displayLanguage} 모델을 받는 중"
+        scope.launch {
+            status = runCatching { com.lumen.player.subtitle.ai.MlKitTranslator.prefetch(source, target) }
+                .fold({ "번역 모델을 받았습니다. 이제 인터넷 없이 번역합니다" }, { "모델을 받지 못했습니다: ${it.message}" })
+        }
+    }) { Text("번역 모델 미리 받기") }
+    status?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted) }
+}
+
 private fun translationModelSuggestions(p: TranslationProvider) = when (p) {
     TranslationProvider.GROQ -> listOf("llama-3.3-70b-versatile", "openai/gpt-oss-120b")
     TranslationProvider.OPENAI -> listOf("gpt-4.1-mini", "gpt-4.1")
     TranslationProvider.CUSTOM -> listOf("qwen2.5:7b", "gemma3:12b")
+    TranslationProvider.ON_DEVICE -> emptyList()
 }
 
 private fun modelSuggestions(p: SttProvider) = when (p) {

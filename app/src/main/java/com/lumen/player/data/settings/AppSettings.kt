@@ -52,12 +52,26 @@ enum class SttProvider(val label: String, val free: Boolean, val defaultModel: S
     CUSTOM("내 서버", true, "whisper-large-v3", "whisper.cpp, faster-whisper 등 OpenAI 호환 서버"),
 }
 
-/** 자막 번역에 쓰는 OpenAI 호환 chat 엔진. 키는 같은 공급자의 음성 인식 키(keyOf)를 함께 쓴다. */
+/**
+ * 자막 번역 엔진. ON_DEVICE는 Google ML Kit로 기기 안에서 번역하고, 나머지는 OpenAI 호환 chat API를 쓴다.
+ * 키가 필요한 엔진은 같은 공급자의 음성 인식 키(keyOf)를 함께 쓴다.
+ */
 @Serializable
-enum class TranslationProvider(val label: String, val defaultModel: String, val keyOf: SttProvider, val note: String) {
+enum class TranslationProvider(
+    val label: String,
+    val defaultModel: String,
+    val keyOf: SttProvider,
+    val note: String,
+    val needsKey: Boolean = true,
+) {
     GROQ("Groq", "llama-3.3-70b-versatile", SttProvider.GROQ, "무료 등급 제공"),
     OPENAI("OpenAI", "gpt-4.1-mini", SttProvider.OPENAI, "유료 · 번역 품질이 안정적"),
-    CUSTOM("내 서버", "qwen2.5:7b", SttProvider.CUSTOM, "Ollama, LM Studio 등 OpenAI 호환 서버"),
+    CUSTOM("내 서버", "qwen2.5:7b", SttProvider.CUSTOM, "Ollama, LM Studio 등 OpenAI 호환 서버", needsKey = false),
+    ON_DEVICE(
+        "기기 안 번역", "ML Kit", SttProvider.CUSTOM,
+        "인터넷 없이 휴대폰에서 번역 · 언어마다 약 30MB 모델을 처음 한 번 받음 · 문맥·용어집은 반영하지 않음",
+        needsKey = false,
+    ),
 }
 
 @Serializable

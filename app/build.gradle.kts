@@ -97,6 +97,11 @@ dependencies {
     implementation(libs.commons.net)
     implementation(libs.nfs.client)
 
+    // 기기 안 번역
+    implementation(libs.mlkit.translate)
+    implementation(libs.mlkit.language.id)
+    implementation(libs.coroutines.play.services)
+
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.okhttp.mockwebserver)
