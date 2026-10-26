@@ -173,6 +173,14 @@ class AiSubtitleGenerator(
         return SubtitleTranslator(http, baseUrl, key, ai.translationModel(), jsonMode = p != TranslationProvider.CUSTOM)
     }
 
+    /** 생성에 필요한데 비어 있는 키의 공급자. 없으면 null */
+    fun missingKey(ai: AiSettings): SttProvider? {
+        if (ai.provider != SttProvider.CUSTOM && settings.apiKey(ai).isBlank()) return ai.provider
+        val keyOf = ai.translator.keyOf
+        if (ai.target().isNotBlank() && ai.translator != TranslationProvider.CUSTOM && settings.apiKey(ai, keyOf).isBlank()) return keyOf
+        return null
+    }
+
     fun cancel() {
         running?.cancel()
         running = null

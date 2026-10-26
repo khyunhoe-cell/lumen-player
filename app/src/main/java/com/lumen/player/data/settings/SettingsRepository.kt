@@ -45,7 +45,10 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
     fun apiKey(ai: AiSettings, provider: SttProvider = ai.provider): String =
         ai.sealedKeys[provider]?.let(SecretBox::open).orEmpty()
 
-    suspend fun setApiKey(provider: SttProvider, plain: String) = updateAi {
-        it.copy(sealedKeys = it.sealedKeys + (provider to SecretBox.seal(plain.trim())))
+    /** 저장한 뒤 다시 읽어 같은 값이 나오는지까지 확인한다. */
+    suspend fun setApiKey(provider: SttProvider, plain: String): Boolean {
+        val key = plain.trim()
+        updateAi { it.copy(sealedKeys = it.sealedKeys + (provider to SecretBox.seal(key))) }
+        return apiKey(current().ai, provider) == key
     }
 }

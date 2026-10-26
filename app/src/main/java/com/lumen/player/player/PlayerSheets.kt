@@ -64,6 +64,7 @@ import androidx.media3.common.C
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
 import com.lumen.player.LumenApp
+import com.lumen.player.data.settings.SttProvider
 import com.lumen.player.data.settings.SubtitleFont
 import com.lumen.player.data.settings.SubtitlePosition
 import com.lumen.player.subtitle.ai.AiJob
@@ -71,6 +72,7 @@ import com.lumen.player.subtitle.online.OnlineSubtitle
 import com.lumen.player.ui.components.ColorSwatches
 import com.lumen.player.ui.components.LabeledSlider
 import com.lumen.player.ui.components.LumenChip
+import com.lumen.player.ui.settings.ApiKeyField
 import com.lumen.player.ui.theme.Lumen
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -160,6 +162,20 @@ fun SubtitleSheet(service: PlaybackService, state: PlayerUiState, onDismiss: () 
         else -> "내장 자막 ${textGroups.size}개"
     }
 
+    var needKey by remember { mutableStateOf<SttProvider?>(null) }
+    fun startAi() {
+        scope.launch {
+            // 방금 저장한 키도 보이도록 화면 상태 대신 저장소에서 최신 설정을 읽는다
+            needKey = container.aiSubtitles.missingKey(container.settings.current().ai)
+            if (needKey != null) return@launch
+            container.aiSubtitles.start(
+                media, container.subtitles,
+                onPartial = { partial -> scope.launch { if (service.current.value?.uri == media.uri) service.setExternalSubtitle(partial) } },
+                onDone = { done -> scope.launch { if (service.current.value?.uri == media.uri) service.setExternalSubtitle(done) } },
+            )
+        }
+    }
+
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         uri ?: return@rememberLauncherForActivityResult
         scope.launch {
@@ -200,14 +216,19 @@ fun SubtitleSheet(service: PlaybackService, state: PlayerUiState, onDismiss: () 
                             modifier = Modifier.weight(1f),
                         ) {
                             message = null
-                            container.aiSubtitles.start(
-                                media, container.subtitles,
-                                onPartial = { partial -> scope.launch { if (service.current.value?.uri == media.uri) service.setExternalSubtitle(partial) } },
-                                onDone = { done -> scope.launch { if (service.current.value?.uri == media.uri) service.setExternalSubtitle(done) } },
-                            )
+                            startAi()
                         }
                     }
-                    job?.takeIf { it.mediaUri == media.uri }?.let { AiJobCard(it) }
+                    needKey?.let { provider ->
+                        // 키가 없으면 여기서 바로 넣고, 저장되면 이어서 생성을 시작한다
+                        Surface(color = Lumen.Ground, shape = RoundedCornerShape(16.dp)) {
+                            Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
+                                Text("AI 자막을 만들려면 ${provider.label} API 키가 필요합니다", style = MaterialTheme.typography.bodySmall)
+                                ApiKeyField(provider, onSaved = { needKey = null; startAi() })
+                            }
+                        }
+                    }
+                    job?.takeIf { it.mediaUri == media.uri && needKey == null }?.let { AiJobCard(it, onRetry = ::startAi) }
 
                     SourceRow("자막 끄기", selected = external == null && textGroups.none { it.isSelected }) {
                         service.setExternalSubtitle(null)
@@ -274,7 +295,7 @@ private fun BigAction(icon: @Composable () -> Unit, title: String, sub: String, 
 }
 
 @Composable
-private fun AiJobCard(job: AiJob) {
+private fun AiJobCard(job: AiJob, onRetry: () -> Unit) {
     val container = LumenApp.container
     Surface(color = Lumen.Ground, shape = RoundedCornerShape(16.dp)) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
@@ -284,6 +305,9 @@ private fun AiJobCard(job: AiJob) {
                     Text("${(job.progress * 100).toInt()}%", style = MaterialTheme.typography.bodySmall, color = Lumen.Primary)
                     TextButton(onClick = { container.aiSubtitles.cancel() }) { Text("취소") }
                 } else {
+                    if (job.stage == AiJob.Stage.FAILED || job.stage == AiJob.Stage.CANCELLED) {
+                        TextButton(onClick = onRetry) { Text("다시 시도") }
+                    }
                     TextButton(onClick = { container.aiSubtitles.dismiss() }) { Text("닫기") }
                 }
             }
