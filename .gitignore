@@ -6,3 +6,4 @@ local.properties
 .kotlin/
 .cxx/
 app/.cxx/
+app/libs/

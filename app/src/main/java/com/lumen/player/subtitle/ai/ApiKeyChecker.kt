@@ -30,7 +30,7 @@ class ApiKeyChecker(private val http: OkHttpClient) {
                     get(Request.Builder().url("https://api.deepgram.com/v1/projects").header("Authorization", "Token $key"))
                     "키가 확인되었습니다"
                 }
-                SttProvider.ON_DEVICE -> "기기 안 인식은 키가 필요 없습니다"
+                SttProvider.ON_DEVICE, SttProvider.SENSE_VOICE -> "기기 안 인식은 키가 필요 없습니다"
                 SttProvider.ELEVENLABS -> {
                     get(Request.Builder().url("https://api.elevenlabs.io/v1/user").header("xi-api-key", key))
                     "키가 확인되었습니다"
