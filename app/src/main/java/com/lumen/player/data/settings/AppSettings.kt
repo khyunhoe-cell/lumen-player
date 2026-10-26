@@ -86,26 +86,51 @@ enum class WhisperModel(val id: String, val fileName: String, val sizeMb: Int, v
 }
 
 /**
- * 자막 번역 엔진. ON_DEVICE는 Google ML Kit로 기기 안에서 번역하고, 나머지는 OpenAI 호환 chat API를 쓴다.
- * 키가 필요한 엔진은 같은 공급자의 음성 인식 키(keyOf)를 함께 쓴다.
+ * 자막 번역 엔진. ON_DEVICE는 Google ML Kit, LOCAL_LLM은 LiteRT-LM으로 기기 안에서 번역하고,
+ * CLAUDE는 Anthropic API, 나머지는 OpenAI 호환 chat API를 쓴다.
+ * keyOf가 있으면 같은 공급자의 음성 인식 키를 함께 쓰고, null이면 번역 전용 키를 따로 둔다.
  */
 @Serializable
 enum class TranslationProvider(
     val label: String,
     val defaultModel: String,
-    val keyOf: SttProvider,
+    val keyOf: SttProvider?,
     val note: String,
     val needsKey: Boolean = true,
 ) {
     // llama-3.3-70b-versatile은 2026-08-16에 무료·개발자 등급에서 종료됐다
     GROQ("Groq", "openai/gpt-oss-120b", SttProvider.GROQ, "무료 등급 제공"),
     OPENAI("OpenAI", "gpt-4.1-mini", SttProvider.OPENAI, "유료 · 번역 품질이 안정적"),
+    DEEPSEEK("DeepSeek", "deepseek-flash", null, "유료 · 저렴함 · 중국어·일본어에 강함"),
+    CLAUDE("Claude", "claude-opus-5-5", null, "유료 · 문맥과 말투를 가장 잘 살림 · Anthropic API 키 필요"),
     CUSTOM("내 서버", "qwen2.5:7b", SttProvider.CUSTOM, "Ollama, LM Studio 등 OpenAI 호환 서버", needsKey = false),
+    LOCAL_LLM(
+        "로컬 AI", "gemma4-e2b", null,
+        "인터넷 없이 휴대폰에서 Gemma 4·Qwen 2.5로 번역 · 모델 1.6~2.0GB를 한 번 받음 · 한 줄씩 번역해 느리고 배터리를 많이 씀",
+        needsKey = false,
+    ),
     ON_DEVICE(
         "기기 안 번역", "ML Kit", SttProvider.CUSTOM,
         "인터넷 없이 휴대폰에서 번역 · 언어마다 약 30MB 모델을 처음 한 번 받음 · 문맥·용어집은 반영하지 않음",
         needsKey = false,
     ),
+    ;
+
+    /** 이 엔진의 키를 두는 자리 */
+    val keySlot: KeySlot get() = keyOf?.let { KeySlot.Stt(it) } ?: KeySlot.Translation(this)
+}
+
+/** API 키를 두는 자리. 음성 인식 공급자의 키이거나, 번역만 하는 공급자(DeepSeek, Claude)의 키 */
+sealed interface KeySlot {
+    val label: String
+
+    data class Stt(val provider: SttProvider) : KeySlot {
+        override val label get() = provider.label
+    }
+
+    data class Translation(val provider: TranslationProvider) : KeySlot {
+        override val label get() = if (provider == TranslationProvider.CLAUDE) "Anthropic" else provider.label
+    }
 }
 
 @Serializable
@@ -113,6 +138,8 @@ data class AiSettings(
     val provider: SttProvider = SttProvider.GROQ,
     /** 공급자별 키. SecretBox로 암호화된 값을 담는다. */
     val sealedKeys: Map<SttProvider, String> = emptyMap(),
+    /** 번역만 하는 공급자의 키(SecretBox로 암호화) */
+    val sealedTranslationKeys: Map<TranslationProvider, String> = emptyMap(),
     val models: Map<SttProvider, String> = emptyMap(),
     val customEndpoint: String = "http://192.168.0.10:8080/v1",
     /** ISO-639-1. 빈 문자열이면 자동 감지 */

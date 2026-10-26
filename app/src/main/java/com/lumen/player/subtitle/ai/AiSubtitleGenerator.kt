@@ -3,6 +3,7 @@ package com.lumen.player.subtitle.ai
 import android.content.Context
 import com.lumen.player.data.media.MediaEntry
 import com.lumen.player.data.settings.AiSettings
+import com.lumen.player.data.settings.KeySlot
 import com.lumen.player.data.settings.SettingsRepository
 import com.lumen.player.data.settings.SttProvider
 import com.lumen.player.data.settings.TranslationProvider
@@ -50,6 +51,7 @@ class AiSubtitleGenerator(
     private val remotes: RemoteRegistry,
     private val whisperModels: WhisperModelManager,
     private val senseVoiceModels: SenseVoiceModelManager,
+    private val localLlmModels: LocalLlmModelManager,
     private val scope: CoroutineScope,
 ) {
     private val _job = MutableStateFlow<AiJob?>(null)
@@ -235,24 +237,31 @@ class AiSubtitleGenerator(
     private fun translatorFor(ai: AiSettings, onStatus: (String) -> Unit): TranslationEngine {
         val p = ai.translator
         if (p == TranslationProvider.ON_DEVICE) return MlKitTranslator(onStatus)
-        val key = settings.apiKey(ai, p.keyOf)
-        if (p.needsKey && key.isBlank()) {
-            throw IllegalStateException("설정 › AI 자막 › 자막 번역에서 ${p.label} API 키를 넣어 주세요")
+        if (p == TranslationProvider.LOCAL_LLM) {
+            val model = LocalLlmModels.find(ai.translationModel())
+            // 로컬 AI가 다른 언어 글자를 섞어 내면 그 줄만 ML Kit로 번역한다
+            return LocalLlmTranslator(context, model, localLlmModels.file(model), onStatus, fallback = MlKitTranslator(onStatus))
         }
+        val key = settings.apiKey(ai, p.keySlot)
+        if (p.needsKey && key.isBlank()) {
+            throw IllegalStateException("설정 › AI 자막 › 자막 번역에서 ${p.keySlot.label} API 키를 넣어 주세요")
+        }
+        if (p == TranslationProvider.CLAUDE) return SubtitleTranslator(ClaudeChatBackend(key), ai.translationModel(), jsonMode = false)
         val baseUrl = when (p) {
             TranslationProvider.GROQ -> "https://api.groq.com/openai/v1"
             TranslationProvider.OPENAI -> "https://api.openai.com/v1"
+            TranslationProvider.DEEPSEEK -> DEEPSEEK_BASE_URL
             TranslationProvider.CUSTOM -> ai.translationEndpoint
-            TranslationProvider.ON_DEVICE -> error("위에서 처리")
+            TranslationProvider.CLAUDE, TranslationProvider.LOCAL_LLM, TranslationProvider.ON_DEVICE -> error("위에서 처리")
         }
         return SubtitleTranslator(http, baseUrl, key, ai.translationModel(), jsonMode = p != TranslationProvider.CUSTOM)
     }
 
-    /** 생성에 필요한데 비어 있는 키의 공급자. 없으면 null */
-    fun missingKey(ai: AiSettings): SttProvider? {
-        if (ai.provider.needsKey && settings.apiKey(ai).isBlank()) return ai.provider
-        val keyOf = ai.translator.keyOf
-        if (ai.target().isNotBlank() && ai.translator.needsKey && settings.apiKey(ai, keyOf).isBlank()) return keyOf
+    /** 생성에 필요한데 비어 있는 키의 자리. 없으면 null */
+    fun missingKey(ai: AiSettings): KeySlot? {
+        if (ai.provider.needsKey && settings.apiKey(ai).isBlank()) return KeySlot.Stt(ai.provider)
+        val slot = ai.translator.keySlot
+        if (ai.target().isNotBlank() && ai.translator.needsKey && settings.apiKey(ai, slot).isBlank()) return slot
         return null
     }
 
@@ -268,5 +277,9 @@ class AiSubtitleGenerator(
     private fun formatTime(ms: Long): String {
         val s = ms / 1000
         return "%d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60)
+    }
+
+    private companion object {
+        const val DEEPSEEK_BASE_URL = "https://api.deepseek.com"
     }
 }
