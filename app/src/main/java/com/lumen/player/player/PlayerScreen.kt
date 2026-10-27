@@ -28,7 +28,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.automirrored.filled.Subject
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Close
@@ -71,6 +74,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -92,7 +97,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
-enum class PlayerSheet { NONE, SPEED, SUBTITLE, QUEUE, AUDIO }
+enum class PlayerSheet { NONE, SPEED, SUBTITLE, SUBTITLE_LIST, QUEUE, AUDIO }
 
 private enum class ResizeMode(val label: String, val value: Int) {
     FIT("화면에 맞춤", AspectRatioFrameLayout.RESIZE_MODE_FIT),
@@ -379,6 +384,20 @@ fun PlayerScreen(
                         touch()
                     },
                     onInteract = ::touch,
+                    // 외부 자막이 있을 때만: 이전·다음 대사의 시작으로 이동
+                    onSubtitleJump = external?.let { sub ->
+                        { forward: Boolean ->
+                            val pos = player.currentPosition - delayMs
+                            val target = if (forward) sub.nextStart(pos) else sub.previousStart(pos)
+                            if (target != null) {
+                                player.seekTo((target + delayMs).coerceAtLeast(0))
+                                subtitleClock = player.currentPosition
+                            } else {
+                                feedback = if (forward) "마지막 대사입니다" else "첫 대사입니다"
+                            }
+                            touch()
+                        }
+                    },
                 )
             }
         }
@@ -406,11 +425,13 @@ fun PlayerScreen(
                 service = service,
                 state = state,
                 onDismiss = { sheet = PlayerSheet.NONE },
+                onOpenList = { sheet = PlayerSheet.SUBTITLE_LIST },
                 onAdjustPosition = {
                     sheet = PlayerSheet.NONE
                     subtitleDragMode = true
                 },
             )
+            PlayerSheet.SUBTITLE_LIST -> SubtitleListSheet(service, onDismiss = { sheet = PlayerSheet.NONE })
             PlayerSheet.QUEUE -> QueueSheet(service, onDismiss = { sheet = PlayerSheet.NONE })
             PlayerSheet.AUDIO -> AudioTrackSheet(state, onDismiss = { sheet = PlayerSheet.NONE })
         }
@@ -490,6 +511,7 @@ private fun PlayerControls(
     resizeLabel: String,
     onResize: () -> Unit,
     onInteract: () -> Unit,
+    onSubtitleJump: ((forward: Boolean) -> Unit)? = null,
 ) {
     val player = service.player
     val speedLabel = if (state.speed == 1f) "1.0×" else "${"%.2f".format(state.speed).trimEnd('0').trimEnd('.')}×"
@@ -594,6 +616,12 @@ private fun PlayerControls(
                 )
                 RowIcon(Icons.Filled.Shuffle, "무작위 재생", { player.shuffleModeEnabled = !player.shuffleModeEnabled }, active = state.shuffle)
                 Spacer(Modifier.weight(1f))
+                if (onSubtitleJump != null) {
+                    SubtitleJump("이전 자막", forward = false) { onSubtitleJump(false) }
+                    Spacer(Modifier.width(8.dp))
+                    SubtitleJump("다음 자막", forward = true) { onSubtitleJump(true) }
+                    RowIcon(Icons.AutoMirrored.Filled.Subject, "자막 전체 보기·편집", { onSheet(PlayerSheet.SUBTITLE_LIST) })
+                }
             }
             LumenSeekBar(
                 positionMs = scrubMs ?: state.positionMs,
@@ -609,6 +637,23 @@ private fun PlayerControls(
                 Spacer(Modifier.width(12.dp))
                 Text(formatDuration(state.durationMs), style = MaterialTheme.typography.bodySmall, color = Lumen.TextSoft)
             }
+        }
+    }
+}
+
+/** 이전·다음 대사로 가는 알약 버튼(화살표 + 자막 표시) */
+@Composable
+private fun SubtitleJump(label: String, forward: Boolean, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(18.dp),
+        color = Color.White.copy(alpha = 0.14f),
+        modifier = Modifier.height(36.dp).semantics { contentDescription = label },
+    ) {
+        Row(Modifier.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (!forward) Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, null, tint = Color.White, modifier = Modifier.size(20.dp))
+            Icon(Icons.Filled.ClosedCaption, null, tint = Color.White, modifier = Modifier.size(18.dp))
+            if (forward) Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Color.White, modifier = Modifier.size(20.dp))
         }
     }
 }

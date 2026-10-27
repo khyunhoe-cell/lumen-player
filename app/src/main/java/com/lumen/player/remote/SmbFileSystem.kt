@@ -83,6 +83,17 @@ class SmbFileSystem(private val server: ServerEntity, private val password: Stri
 
     override fun open(path: String, offset: Long): InputStream = SmbRangeStream(openFile(path), offset)
 
+    override fun write(path: String, bytes: ByteArray) {
+        share().openFile(
+            smbPath(path),
+            EnumSet.of(AccessMask.GENERIC_WRITE),
+            null,
+            SMB2ShareAccess.ALL,
+            SMB2CreateDisposition.FILE_OVERWRITE_IF,
+            null,
+        ).use { f -> f.outputStream.use { it.write(bytes) } }
+    }
+
     override fun close() {
         runCatching { share?.close() }
         runCatching { session?.close() }

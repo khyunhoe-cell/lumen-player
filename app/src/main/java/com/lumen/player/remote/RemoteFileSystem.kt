@@ -21,6 +21,11 @@ interface RemoteFileSystem : Closeable {
     fun list(path: String): List<RemoteEntry>
     fun size(path: String): Long
     fun open(path: String, offset: Long): InputStream
+
+    /** 파일을 [bytes]로 만들거나 덮어쓴다(자막을 영상 옆에 저장할 때). 쓸 수 없는 저장소는 그대로 둔다 */
+    fun write(path: String, bytes: ByteArray) {
+        throw UnsupportedOperationException("이 저장소에는 파일을 저장할 수 없습니다")
+    }
 }
 
 object RemoteUris {
