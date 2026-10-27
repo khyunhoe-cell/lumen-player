@@ -214,6 +214,9 @@ fun AiSettingsScreen(nav: NavController) {
             Label("인식 옵션")
             RecognitionOptions(ai)
 
+            Label("화자 구분")
+            SpeakerSection(ai)
+
             TranslationSection(ai)
             Spacer(Modifier.height(24.dp))
         }
@@ -489,7 +492,6 @@ private fun modelSuggestions(p: SttProvider) = when (p) {
 @Composable
 private fun SenseVoiceSection(ai: AiSettings) {
     val models = LumenApp.container.senseVoiceModels
-    val st by models.state.collectAsState()
     val mb = com.lumen.player.subtitle.ai.SenseVoice.totalSize / 1_000_000
     Text(
         "모델(약 ${mb}MB)을 한 번 받아 두면 인터넷 없이 인식합니다. 말소리 구간만 골라 인식해 기기 안 Whisper보다 훨씬 빠릅니다. " +
@@ -502,9 +504,44 @@ private fun SenseVoiceSection(ai: AiSettings) {
             style = MaterialTheme.typography.bodySmall, color = Lumen.Error,
         )
     }
+    ModelBundleCard("SenseVoice int8 + Silero VAD · 약 ${mb}MB", models)
+}
+
+/** 화자 구분: 켜면 화자가 바뀔 때 다음 자막으로 넘기고, 짧은 주고받기는 대시 두 줄로 묶는다 */
+@Composable
+private fun SpeakerSection(ai: AiSettings) {
+    val container = LumenApp.container
+    val scope = rememberCoroutineScope()
+    ToggleRow(
+        "화자 구분",
+        "화자가 바뀌면 다음 자막으로 넘기고, 짧게 주고받는 대사는 대시(-) 두 줄로 보여 줍니다",
+        ai.diarize,
+    ) { v -> scope.launch { container.settings.updateAi { it.copy(diarize = v) } } }
+    if (!ai.diarize) return
+    if (ai.provider.diarizesItself) {
+        Text(
+            "${ai.provider.label}이(가) 인식하면서 화자를 함께 구분합니다. 따로 받을 모델이 없습니다.",
+            style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted,
+        )
+        return
+    }
+    val models = container.diarizationModels
+    val mb = models.totalSize / 1_000_000
+    Text(
+        "휴대폰 안에서 목소리로 화자를 나눕니다. 모델(약 ${mb}MB)을 한 번 받아 두면 인터넷 없이 쓸 수 있고, " +
+            "10분 조각마다 몇십 초 정도 더 걸립니다. 목소리가 비슷하거나 대사가 겹치면 잘못 나눌 수 있습니다.",
+        style = MaterialTheme.typography.bodySmall, color = Lumen.TextMuted,
+    )
+    ModelBundleCard("pyannote 구간 나누기 + CAM++ 화자 특징 · 약 ${mb}MB", models)
+}
+
+/** 여러 파일로 된 모델 묶음 하나를 받고 지운다. 받는 중에는 진행률을 보여 준다 */
+@Composable
+private fun ModelBundleCard(title: String, models: com.lumen.player.subtitle.ai.ModelBundleManager) {
+    val st by models.state.collectAsState()
     Surface(color = Lumen.Surface, shape = RoundedCornerShape(16.dp)) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
-            Text("SenseVoice int8 + Silero VAD · 약 ${mb}MB", style = MaterialTheme.typography.titleSmall)
+            Text(title, style = MaterialTheme.typography.titleSmall)
             val progress = st.progress
             when {
                 progress != null -> {

@@ -10,6 +10,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -23,9 +24,16 @@ import okhttp3.Response
 import java.io.File
 import java.io.IOException
 
-/** 단어 시간이 있으면 자막을 더 정확한 지점에서 자를 수 있다. */
-data class Word(val startMs: Long, val endMs: Long, val text: String)
-data class Segment(val startMs: Long, val endMs: Long, val text: String, val words: List<Word> = emptyList())
+/** 단어 시간이 있으면 자막을 더 정확한 지점에서 자를 수 있다. speaker는 화자 구분을 켰을 때의 화자 번호 */
+data class Word(val startMs: Long, val endMs: Long, val text: String, val speaker: Int? = null)
+data class Segment(
+    val startMs: Long,
+    val endMs: Long,
+    val text: String,
+    val words: List<Word> = emptyList(),
+    /** 화자 번호. 화자 구분을 끄면 null */
+    val speaker: Int? = null,
+)
 
 interface SttClient {
     suspend fun transcribe(chunk: File, previousText: String): List<Segment>
@@ -161,6 +169,7 @@ class DeepgramClient(private val http: OkHttpClient, private val apiKey: String,
             .addQueryParameter("utterances", "true")
             .addQueryParameter("utt_split", "0.8")
             .apply {
+                if (settings.diarize) addQueryParameter("diarize", "true")
                 if (settings.language.isNotBlank()) addQueryParameter("language", settings.language)
                 else addQueryParameter("detect_language", "true")
                 settings.vocabularyPrompt.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }.take(50)
@@ -178,6 +187,7 @@ class DeepgramClient(private val http: OkHttpClient, private val apiKey: String,
                     ((wo.num("start") ?: return@mapNotNull null) * 1000).toLong(),
                     ((wo.num("end") ?: 0.0) * 1000).toLong(),
                     (wo["punctuated_word"] ?: wo["word"])?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    wo["speaker"]?.jsonPrimitive?.intOrNull,
                 )
             }
             Segment(
@@ -185,6 +195,7 @@ class DeepgramClient(private val http: OkHttpClient, private val apiKey: String,
                 ((o.num("end") ?: return@mapNotNull null) * 1000).toLong(),
                 o["transcript"]?.jsonPrimitive?.contentOrNull.orEmpty().trim(),
                 words,
+                o["speaker"]?.jsonPrimitive?.intOrNull,
             )
         }
     }
@@ -201,6 +212,7 @@ class ElevenLabsClient(private val http: OkHttpClient, private val apiKey: Strin
                         .addFormDataPart("file", chunk.name, chunk.asRequestBody(wav))
                         .addFormDataPart("timestamps_granularity", "word")
                         .addFormDataPart("tag_audio_events", "false")
+                        .apply { if (settings.diarize) addFormDataPart("diarize", "true") }
                         .apply { if (settings.language.isNotBlank()) addFormDataPart("language_code", settings.language) }
                         .build(),
                 )
@@ -210,7 +222,13 @@ class ElevenLabsClient(private val http: OkHttpClient, private val apiKey: Strin
         val words = root["words"]?.jsonArray.orEmpty().mapNotNull {
             val o = it.jsonObject
             if (o["type"]?.jsonPrimitive?.contentOrNull != "word") return@mapNotNull null
-            Word(((o.num("start") ?: return@mapNotNull null) * 1000).toLong(), ((o.num("end") ?: 0.0) * 1000).toLong(), o["text"]?.jsonPrimitive?.contentOrNull.orEmpty())
+            Word(
+                ((o.num("start") ?: return@mapNotNull null) * 1000).toLong(),
+                ((o.num("end") ?: 0.0) * 1000).toLong(),
+                o["text"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                // "speaker_0" 꼴
+                o["speaker_id"]?.jsonPrimitive?.contentOrNull?.filter { it.isDigit() }?.toIntOrNull(),
+            )
         }
         return SegmentFormatter.wordsToSegments(words)
     }
