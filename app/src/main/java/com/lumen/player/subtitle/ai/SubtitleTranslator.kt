@@ -2,6 +2,7 @@ package com.lumen.player.subtitle.ai
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
@@ -59,6 +60,8 @@ class OpenAiChatBackend(
     private val http: OkHttpClient,
     private val baseUrl: String,
     private val apiKey: String,
+    /** 공급자 고유 요청 필드. 예: DeepSeek의 thinking 끄기 */
+    private val extraBody: Map<String, JsonElement> = emptyMap(),
 ) : ChatBackend {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val jsonType = "application/json; charset=utf-8".toMediaType()
@@ -68,6 +71,7 @@ class OpenAiChatBackend(
             put("model", model)
             put("temperature", 0.2)
             if (jsonMode) putJsonObject("response_format") { put("type", "json_object") }
+            extraBody.forEach { (k, v) -> put(k, v) }
             putJsonArray("messages") {
                 addJsonObject {
                     put("role", "system")

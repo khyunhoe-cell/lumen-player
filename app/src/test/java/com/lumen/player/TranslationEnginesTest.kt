@@ -7,12 +7,16 @@ import com.lumen.player.subtitle.ai.ApiKeyRejectedException
 import com.lumen.player.subtitle.ai.ClaudeChatBackend
 import com.lumen.player.subtitle.ai.LocalLlmPrompt
 import com.lumen.player.subtitle.ai.ModelNotFoundException
+import com.lumen.player.subtitle.ai.OpenAiChatBackend
 import com.lumen.player.subtitle.ai.ScriptCheck
 import com.lumen.player.subtitle.ai.SubtitleTranslator
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import kotlin.test.Test
@@ -65,6 +69,20 @@ class TranslationEnginesTest {
         assertTrue(runCatching { backend.complete("claude-haiku-5-5", "s", "u", false) }.exceptionOrNull() is ApiKeyRejectedException)
         assertTrue(runCatching { backend.complete("claude-x", "s", "u", false) }.exceptionOrNull() is ModelNotFoundException)
         backend.close()
+        server.shutdown()
+    }
+
+    @Test fun deepSeekSendsThinkingDisabled() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setHeader("Content-Type", "application/json")
+            .setBody("""{"choices":[{"message":{"content":"{\"lines\": [\"안녕\"]}"}}]}"""))
+        server.start()
+        val backend = OpenAiChatBackend(OkHttpClient(), server.url("/").toString(), "sk-test",
+            extraBody = mapOf("thinking" to buildJsonObject { put("type", "disabled") }))
+        assertEquals(listOf("안녕"), SubtitleTranslator(backend, "deepseek-flash").translate(listOf("Hi"), "ko"))
+        val body = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertEquals("disabled", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("json_object", body["response_format"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         server.shutdown()
     }
 

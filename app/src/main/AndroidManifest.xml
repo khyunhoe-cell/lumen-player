@@ -24,6 +24,10 @@
         android:usesCleartextTraffic="true"
         android:networkSecurityConfig="@xml/network_security_config">
 
+        <!-- 로컬 AI 번역(LiteRT-LM)의 GPU 실행에 쓰는 시스템 라이브러리. 선언하지 않으면 앱이 열 수 없어 GPU 실행이 실패한다 -->
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

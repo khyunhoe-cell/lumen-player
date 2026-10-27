@@ -23,6 +23,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
 import java.io.File
 
@@ -247,12 +249,17 @@ class AiSubtitleGenerator(
             throw IllegalStateException("설정 › AI 자막 › 자막 번역에서 ${p.keySlot.label} API 키를 넣어 주세요")
         }
         if (p == TranslationProvider.CLAUDE) return SubtitleTranslator(ClaudeChatBackend(key), ai.translationModel(), jsonMode = false)
+        if (p == TranslationProvider.DEEPSEEK) {
+            // DeepSeek는 생각(thinking)이 기본으로 켜져 있어(effort high) 40줄 묶음 하나에 몇 분씩 걸린다.
+            // 자막 번역에는 필요 없으므로 끈다
+            val backend = OpenAiChatBackend(http, DEEPSEEK_BASE_URL, key, extraBody = DEEPSEEK_NO_THINKING)
+            return SubtitleTranslator(backend, ai.translationModel())
+        }
         val baseUrl = when (p) {
             TranslationProvider.GROQ -> "https://api.groq.com/openai/v1"
             TranslationProvider.OPENAI -> "https://api.openai.com/v1"
-            TranslationProvider.DEEPSEEK -> DEEPSEEK_BASE_URL
             TranslationProvider.CUSTOM -> ai.translationEndpoint
-            TranslationProvider.CLAUDE, TranslationProvider.LOCAL_LLM, TranslationProvider.ON_DEVICE -> error("위에서 처리")
+            TranslationProvider.CLAUDE, TranslationProvider.DEEPSEEK, TranslationProvider.LOCAL_LLM, TranslationProvider.ON_DEVICE -> error("위에서 처리")
         }
         return SubtitleTranslator(http, baseUrl, key, ai.translationModel(), jsonMode = p != TranslationProvider.CUSTOM)
     }
@@ -281,5 +288,6 @@ class AiSubtitleGenerator(
 
     private companion object {
         const val DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+        val DEEPSEEK_NO_THINKING = mapOf("thinking" to buildJsonObject { put("type", "disabled") })
     }
 }

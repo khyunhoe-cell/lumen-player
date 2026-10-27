@@ -146,6 +146,7 @@ class LocalLlmTranslator(
         }
         onStatus("${model.label} 모델을 불러오는 중")
         val backends = if (model.tryGpu) listOf(Backend.GPU(), Backend.CPU()) else listOf(Backend.CPU())
+        val errors = mutableListOf<String>()
         var last: Throwable? = null
         for (backend in backends) {
             try {
@@ -156,9 +157,11 @@ class LocalLlmTranslator(
             } catch (e: Throwable) {
                 Log.w(TAG, "${model.id} ${backend.name} 로드 실패", e)
                 last = e
+                errors += "${backend.name}: ${e.message?.lineSequence()?.lastOrNull { it.isNotBlank() }?.trim() ?: e.javaClass.simpleName}"
             }
         }
-        throw IllegalStateException("${model.label} 모델을 불러오지 못했습니다: ${last?.message}", last)
+        // GPU용 변환본은 CPU에서 열리지 않으므로 GPU 실패 이유를 먼저 보여 준다
+        throw IllegalStateException("${model.label} 모델을 불러오지 못했습니다 · ${errors.joinToString(" / ")}", last)
     }
 
     override fun close() {
