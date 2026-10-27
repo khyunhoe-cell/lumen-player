@@ -131,5 +131,13 @@ class WebDavFileSystem(
         return stream
     }
 
+    override fun write(path: String, bytes: ByteArray) {
+        val req = Request.Builder().url(url(path)).put(bytes.toRequestBody(null)).auth().build()
+        http.newCall(req).execute().use { resp ->
+            if (resp.code == 401 || resp.code == 403) throw IOException("WebDAV에 저장할 권한이 없습니다 (${resp.code})")
+            if (!resp.isSuccessful) throw IOException("WebDAV에 저장하지 못했습니다 (${resp.code})")
+        }
+    }
+
     override fun close() = Unit
 }

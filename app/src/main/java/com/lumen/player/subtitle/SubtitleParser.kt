@@ -155,15 +155,31 @@ object SubtitleParser {
         .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
         .lines().joinToString("\n") { it.trim() }.trim()
 
+    /** "1:02.3", "01:02,345", "1:02:03.4", "62.5" 같은 표기를 밀리초로 바꾼다. 읽지 못하면 null */
+    fun parseTime(text: String): Long? {
+        val m = Regex("""^\s*(?:(\d+):)?(?:(\d+):)?(\d+)(?:[.,](\d{1,3}))?\s*$""").find(text) ?: return null
+        val parts = listOfNotNull(m.groupValues[1].ifEmpty { null }, m.groupValues[2].ifEmpty { null }).map { it.toLong() }
+        val (h, min) = when (parts.size) {
+            2 -> parts[0] to parts[1]
+            1 -> 0L to parts[0]
+            else -> 0L to 0L
+        }
+        val sec = m.groupValues[3].toLong()
+        val frac = m.groupValues[4].padEnd(3, '0').toLong()
+        if (parts.isNotEmpty() && sec >= 60) return null
+        return ((h * 60 + min) * 60 + sec) * 1000 + frac
+    }
+
     fun toSrt(cues: List<SubtitleCue>): String = buildString {
-        cues.forEachIndexed { i, c ->
+        cues.sortedBy { it.startMs }.forEachIndexed { i, c ->
             append(i + 1).append('\n')
             append(srtTime(c.startMs)).append(" --> ").append(srtTime(c.endMs)).append('\n')
             append(c.text).append("\n\n")
         }
     }
 
-    private fun srtTime(ms: Long): String {
+    /** 00:01:02,345 */
+    fun srtTime(ms: Long): String {
         val h = ms / 3_600_000
         val m = ms / 60_000 % 60
         val s = ms / 1000 % 60

@@ -94,6 +94,18 @@ class FtpFileSystem(
         }
     }
 
+    override fun write(path: String, bytes: ByteArray) {
+        val client = connect()
+        try {
+            if (!client.storeFile(full(path), bytes.inputStream())) {
+                throw IOException("FTP에 저장하지 못했습니다: ${client.replyString.trim()}")
+            }
+        } finally {
+            runCatching { client.logout() }
+            runCatching { client.disconnect() }
+        }
+    }
+
     @Synchronized
     override fun close() {
         runCatching { listClient?.logout() }

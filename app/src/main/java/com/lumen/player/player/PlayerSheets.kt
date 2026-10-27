@@ -30,10 +30,12 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Subject
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -143,7 +145,7 @@ private enum class SubtitleTab(val label: String) { SOURCE("자막 선택"), STY
 @OptIn(ExperimentalLayoutApi::class)
 @UnstableApi
 @Composable
-fun SubtitleSheet(service: PlaybackService, state: PlayerUiState, onDismiss: () -> Unit, onAdjustPosition: () -> Unit) {
+fun SubtitleSheet(service: PlaybackService, state: PlayerUiState, onDismiss: () -> Unit, onOpenList: () -> Unit, onAdjustPosition: () -> Unit) {
     val container = LumenApp.container
     val entry by service.current.collectAsState()
     val external by service.externalSubtitle.collectAsState()
@@ -153,6 +155,8 @@ fun SubtitleSheet(service: PlaybackService, state: PlayerUiState, onDismiss: () 
     var tab by remember { mutableStateOf(SubtitleTab.SOURCE) }
     var searching by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    var saving by remember { mutableStateOf(false) }
     val media = entry ?: return
 
     val textGroups = state.tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
@@ -194,6 +198,8 @@ fun SubtitleSheet(service: PlaybackService, state: PlayerUiState, onDismiss: () 
             SubtitleTab.entries.forEach { t -> LumenChip(t.label, selected = tab == t) { tab = t; searching = false } }
         }
         message?.let { Text(it, color = Lumen.Error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp)) }
+        notice?.let { Text(it, color = Lumen.Primary, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp)) }
+        if (saving) SaveToVideoDialog(service, onDone = { result -> saving = false; notice = result })
         when (tab) {
             SubtitleTab.SOURCE -> if (searching) {
                 OnlineSearchPanel(service, onBack = { searching = false }, onError = { message = it })
@@ -229,6 +235,26 @@ fun SubtitleSheet(service: PlaybackService, state: PlayerUiState, onDismiss: () 
                         }
                     }
                     job?.takeIf { it.mediaUri == media.uri && needKey == null }?.let { AiJobCard(it, onRetry = ::startAi) }
+                    external?.let { sub ->
+                        // 지금 자막: 전체 보기·편집, 영상 옆에 저장
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            BigAction(
+                                icon = { Icon(Icons.AutoMirrored.Filled.Subject, null, modifier = Modifier.size(20.dp)) },
+                                title = "전체 보기·편집",
+                                sub = "${sub.cues.size}줄",
+                                highlighted = false,
+                                modifier = Modifier.weight(1f),
+                                onClick = onOpenList,
+                            )
+                            BigAction(
+                                icon = { Icon(Icons.Filled.SaveAlt, null, modifier = Modifier.size(20.dp)) },
+                                title = "영상 위치에 저장",
+                                sub = "영상 폴더에 .srt로",
+                                highlighted = false,
+                                modifier = Modifier.weight(1f),
+                            ) { saving = true; notice = null; message = null }
+                        }
+                    }
 
                     SourceRow("자막 끄기", selected = external == null && textGroups.none { it.isSelected }) {
                         service.setExternalSubtitle(null)

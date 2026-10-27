@@ -2,6 +2,7 @@ package com.lumen.player.remote
 
 import com.emc.ecs.nfsclient.nfs.io.Nfs3File
 import com.emc.ecs.nfsclient.nfs.io.NfsFileInputStream
+import com.emc.ecs.nfsclient.nfs.io.NfsFileOutputStream
 import com.emc.ecs.nfsclient.nfs.nfs3.Nfs3
 import com.emc.ecs.nfsclient.rpc.CredentialUnix
 import com.lumen.player.data.db.ServerEntity
@@ -40,6 +41,13 @@ class NfsFileSystem(server: ServerEntity) : RemoteFileSystem {
         val stream = NfsFileInputStream(file(path))
         if (offset > 0) stream.skip(offset)
         return stream
+    }
+
+    override fun write(path: String, bytes: ByteArray) {
+        val f = file(path)
+        if (f.exists()) f.delete()
+        f.createNewFile()
+        NfsFileOutputStream(f).use { it.write(bytes) }
     }
 
     override fun close() = Unit
