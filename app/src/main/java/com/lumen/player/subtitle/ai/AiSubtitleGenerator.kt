@@ -1,6 +1,7 @@
 package com.lumen.player.subtitle.ai
 
 import android.content.Context
+import android.util.Log
 import com.lumen.player.data.media.MediaEntry
 import com.lumen.player.data.settings.AiSettings
 import com.lumen.player.data.settings.KeySlot
@@ -53,6 +54,7 @@ class AiSubtitleGenerator(
     private val remotes: RemoteRegistry,
     private val whisperModels: WhisperModelManager,
     private val senseVoiceModels: SenseVoiceModelManager,
+    private val diarizationModels: DiarizationModelManager,
     private val localLlmModels: LocalLlmModelManager,
     private val scope: CoroutineScope,
 ) {
@@ -73,6 +75,8 @@ class AiSubtitleGenerator(
             var ticker: Job? = null
             var translatorRef: TranslationEngine? = null
             var clientRef: SttClient? = null
+            var diarizer: DeviceDiarizer? = null
+            var diarizeNotice: String? = null
             // 끝난 뒤에는 진행률 갱신이 완료·실패 상태를 덮어쓰지 않게 한다
             val finished = java.util.concurrent.atomic.AtomicBoolean(false)
             try {
@@ -107,6 +111,10 @@ class AiSubtitleGenerator(
                     }
                 }
                 clientRef = client
+                if (ai.diarize && !ai.provider.diarizesItself) {
+                    if (diarizationModels.isDownloaded()) diarizer = DeviceDiarizer(diarizationModels.dir)
+                    else diarizeNotice = "화자 분리 모델을 받지 않아 화자를 구분하지 않았습니다"
+                }
                 val target = ai.target()
                 var statusHook: (String) -> Unit = {}
                 val translator = if (target.isBlank()) null else translatorFor(ai) { statusHook(it) }
@@ -176,13 +184,27 @@ class AiSubtitleGenerator(
                         transcribedMs = chunk.startMs + chunk.durationMs * pct / 100
                         stageText = "음성을 인식하는 중 · ${formatTime(chunk.startMs)}부터 · 이 조각 $pct%"
                     }
-                    val segments = withContext(Dispatchers.IO + rateLimit + chunkProgress) { client.transcribe(chunk.file, previousText) }
+                    val recognized = withContext(Dispatchers.IO + rateLimit + chunkProgress) { client.transcribe(chunk.file, previousText) }
+                    val turns = diarizer?.let { d ->
+                        report("화자를 구분하는 중 · ${formatTime(chunk.startMs)}부터")
+                        // 화자 분리가 실패해도 자막은 화자 구분 없이 계속 만든다
+                        runCatching { d.process(chunk.file) }.onFailure { e ->
+                            if (e is CancellationException) throw e
+                            diarizeNotice = "화자를 구분하지 못했습니다 (${e.message})"
+                        }.getOrNull()
+                    }
                     chunk.file.delete()
+                    val segments = if (ai.diarize) SpeakerSplitter.apply(recognized, turns) else recognized
+                    if (ai.diarize) {
+                        Log.i(TAG, "화자 구분 ${formatTime(chunk.startMs)}: 구간 ${turns?.size ?: "-"}개, 화자 ${segments.mapNotNull { it.speaker }.distinct().size}명, 대사 ${recognized.size} → ${segments.size}, 순서 ${segments.joinToString("") { (it.speaker ?: -1).toString() }}")
+                    }
                     val shifted = segments.map { s ->
                         s.copy(
                             startMs = s.startMs + chunk.startMs,
                             endMs = s.endMs + chunk.startMs,
                             words = s.words.map { w -> w.copy(startMs = w.startMs + chunk.startMs, endMs = w.endMs + chunk.startMs) },
+                            // 조각마다 화자 번호를 새로 매기므로 조각 사이에서 같은 번호가 이어지지 않게 한다
+                            speaker = s.speaker?.let { chunk.startMs.toInt() / 1000 * 100 + it },
                         )
                     }
                     val forCues = if (translator == null || shifted.isEmpty()) shifted else {
@@ -195,7 +217,7 @@ class AiSubtitleGenerator(
                         shifted.zip(translated) { s, t -> s.copy(text = t, words = emptyList()) }
                     }
                     cues += SegmentFormatter.toCues(forCues, ai.maxCharsPerLine)
-                    previousText = segments.lastOrNull()?.text.orEmpty()
+                    previousText = recognized.lastOrNull()?.text.orEmpty()
                     transcribedMs = chunk.startMs + chunk.durationMs
                     if (entry.durationMs <= 0) extractProgress = 1f
                     onPartial(LoadedSubtitle("$label (생성 중)", "", cues.toList()))
@@ -216,7 +238,7 @@ class AiSubtitleGenerator(
                     } else {
                         "자막 ${cues.size}줄을 만들었습니다"
                     }
-                    ) + (translator?.notice?.let { ". $it" } ?: "")
+                    ) + (translator?.notice?.let { ". $it" } ?: "") + (diarizeNotice?.let { ". $it" } ?: "")
                 _job.value = AiJob(entry.uri, entry.title, AiJob.Stage.DONE, 1f, doneMsg, cues.size)
                 onDone(result)
             } catch (e: CancellationException) {
@@ -229,6 +251,7 @@ class AiSubtitleGenerator(
             } finally {
                 translatorRef?.close()
                 clientRef?.close()
+                diarizer?.close()
                 ticker?.cancel()
                 extractor?.cancel()
                 workDir.deleteRecursively()
@@ -287,6 +310,7 @@ class AiSubtitleGenerator(
     }
 
     private companion object {
+        const val TAG = "AiSubtitle"
         const val DEEPSEEK_BASE_URL = "https://api.deepseek.com"
         val DEEPSEEK_NO_THINKING = mapOf("thinking" to buildJsonObject { put("type", "disabled") })
     }

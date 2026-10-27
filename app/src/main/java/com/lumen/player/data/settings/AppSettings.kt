@@ -64,6 +64,10 @@ enum class SttProvider(
         "기기 안 SenseVoice", true, "sense-voice-int8",
         "인터넷 없이 휴대폰에서 빠르게 인식 · 한국어·영어·일본어·중국어·광둥어만 · 모델 약 240MB", needsKey = false,
     ),
+    ;
+
+    /** 공급자가 직접 화자를 구분해 주는지. 아니면 기기 안 화자 분리(sherpa-onnx)를 쓴다 */
+    val diarizesItself get() = this == DEEPGRAM || this == ELEVENLABS
 }
 
 /**
@@ -156,6 +160,8 @@ data class AiSettings(
     val maxCharsPerLine: Int = 32,
     /** 기기 안 인식에서 빔 서치(5)를 쓸지. 더 정확하지만 2~3배 느리다 */
     val onDeviceAccurate: Boolean = false,
+    /** 화자를 구분해 화자가 바뀌면 다음 자막으로 넘긴다 */
+    val diarize: Boolean = false,
 ) {
     fun model(p: SttProvider = provider) = models[p]?.takeIf { it.isNotBlank() } ?: p.defaultModel
 

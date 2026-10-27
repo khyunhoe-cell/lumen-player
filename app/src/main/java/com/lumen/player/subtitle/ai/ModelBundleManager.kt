@@ -12,19 +12,32 @@ import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.io.File
 
+/** 기기 안 SenseVoice 모델(SenseVoice int8, 토큰, Silero VAD) */
+class SenseVoiceModelManager(context: Context, http: OkHttpClient, scope: CoroutineScope) :
+    ModelBundleManager(File(context.filesDir, SenseVoice.DIR_NAME), SenseVoice.FILES, http, scope)
+
+/** 기기 안 화자 분리 모델(pyannote 구간 나누기 + CAM++ 화자 특징) */
+class DiarizationModelManager(context: Context, http: OkHttpClient, scope: CoroutineScope) :
+    ModelBundleManager(File(context.filesDir, Diarization.DIR_NAME), Diarization.FILES, http, scope)
+
 /**
- * 기기 안 SenseVoice 모델(SenseVoice int8, 토큰, Silero VAD)을 받아 앱 저장소에 둔다.
+ * 여러 파일로 된 모델 묶음을 받아 앱 저장소의 [dir]에 둔다.
  * 끊기면 받은 데까지 이어 받고, 파일마다 크기와 SHA-256을 확인한다.
  */
-class SenseVoiceModelManager(context: Context, private val http: OkHttpClient, private val scope: CoroutineScope) {
-    val dir = File(context.filesDir, SenseVoice.DIR_NAME)
+open class ModelBundleManager(
+    val dir: File,
+    private val files: List<ModelFile>,
+    private val http: OkHttpClient,
+    private val scope: CoroutineScope,
+) {
+    val totalSize = files.sumOf { it.size }
     private var job: Job? = null
 
     private val _state = MutableStateFlow(ModelState(isDownloaded()))
     val state: StateFlow<ModelState> = _state.asStateFlow()
 
     fun file(spec: ModelFile) = File(dir, spec.name)
-    fun isDownloaded() = SenseVoice.FILES.all { file(it).length() == it.size }
+    fun isDownloaded() = files.all { file(it).length() == it.size }
 
     fun download() {
         if (job?.isActive == true) return
@@ -32,9 +45,9 @@ class SenseVoiceModelManager(context: Context, private val http: OkHttpClient, p
             _state.value = ModelState(false, 0f)
             try {
                 dir.mkdirs()
-                val total = SenseVoice.totalSize
+                val total = totalSize
                 var before = 0L
-                for (spec in SenseVoice.FILES) {
+                for (spec in files) {
                     if (file(spec).length() != spec.size) fetch(spec) { done -> _state.value = ModelState(false, (before + done).toFloat() / total) }
                     before += spec.size
                 }
