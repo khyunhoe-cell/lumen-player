@@ -177,6 +177,24 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    /**
+     * 재생을 끝낸다(일시정지가 아니라 종료). 이어 보기 위치를 저장하고 대기열을 비워
+     * 알림·백그라운드 재생·영상으로 돌아가기 버튼이 모두 사라지게 한다.
+     */
+    fun stopPlayback() {
+        scope.launch {
+            saveCurrent()
+            // clearMediaItems()가 onMediaItemTransition을 부르므로 대기열을 먼저 비워야 현재 항목이 되살아나지 않는다
+            queue.clear()
+            _queueFlow.value = emptyList()
+            player.stop()
+            player.clearMediaItems()
+            _current.value = null
+            _externalSubtitle.value = null
+            stopSelf()
+        }
+    }
+
     fun enqueue(entries: List<MediaEntry>) {
         if (queue.isEmpty()) return play(entries, 0)
         queue.addAll(entries)
