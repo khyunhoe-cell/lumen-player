@@ -31,6 +31,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Headphones
@@ -360,6 +361,10 @@ fun PlayerScreen(
                     scrubMs = scrubMs,
                     onScrub = { scrubMs = it; touch() },
                     onBack = onClose,
+                    onExit = {
+                        service.stopPlayback()
+                        onClose()
+                    },
                     onSheet = { sheet = it; touch() },
                     onToggleBackground = {
                         scope.launch { container.settings.update { s -> s.copy(backgroundPlayback = !s.backgroundPlayback) } }
@@ -477,6 +482,7 @@ private fun PlayerControls(
     scrubMs: Long?,
     onScrub: (Long?) -> Unit,
     onBack: () -> Unit,
+    onExit: () -> Unit,
     onSheet: (PlayerSheet) -> Unit,
     onToggleBackground: () -> Unit,
     onPip: () -> Unit,
@@ -517,6 +523,8 @@ private fun PlayerControls(
                 )
             }
             IconButton(onClick = onPip) { Icon(Icons.Filled.PictureInPictureAlt, "화면 속 화면", tint = Color.White) }
+            // 뒤로 가기는 재생을 그대로 두고 화면만 닫는다. 이 버튼은 재생 자체를 끝낸다
+            IconButton(onClick = onExit) { Icon(Icons.Filled.Close, "재생 종료", tint = Color.White) }
         }
 
         Row(

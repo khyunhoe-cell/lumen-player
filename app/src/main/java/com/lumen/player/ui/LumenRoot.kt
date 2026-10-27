@@ -41,6 +41,7 @@ import com.lumen.player.ui.browse.BrowseScreen
 import com.lumen.player.ui.browse.LocalFolderScreen
 import com.lumen.player.ui.browse.RemoteBrowserScreen
 import com.lumen.player.ui.components.MiniPlayer
+import com.lumen.player.ui.components.ResumeVideoButton
 import com.lumen.player.ui.library.LibraryScreen
 import com.lumen.player.ui.onboarding.OnboardingScreen
 import com.lumen.player.ui.playlists.PlaylistDetailScreen
@@ -111,6 +112,7 @@ fun LumenRoot() {
     val currentRoute = backStack?.destination?.route
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
+        floatingActionButton = { ResumeVideoButton() },
         bottomBar = {
             Column {
                 MiniPlayer()
